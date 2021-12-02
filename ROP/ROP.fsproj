@@ -1,0 +1,32 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <Authors>Gian-Luca ANFOSSI</Authors>
+    <Company>Ganfoss</Company>
+    <PackageIcon>ROP.ico</PackageIcon> 
+
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="ROP.ico" />
+    <Compile Include="Option.Extension.fs" />
+    <Compile Include="Choice.Extension.fs" />
+    <Compile Include="Result.Extension.fs" />
+    <Compile Include="Returns.fs" />
+    <None Include="ROP.ico">
+      <Pack>True</Pack>
+      <PackagePath></PackagePath>
+    </None>
+    <None Include="Validate %28OBSOLETE%29.fs" />
+    <Compile Include="Validation.fs" />
+    <None Include="Example.Result.fsx" />
+    <None Include="Examples.Returns.General.fsx" />
+    <None Include="Examples.Returns.Validation.Series.fsx" />
+    <None Include="Examples.Returns.Validation.Parallel.1.fsx" />
+    <None Include="Examples.Returns.Validation.Parallel.2.fsx" />
+    <None Include="Script5.fsx" />
+    <None Include="Script6.fsx" />
+    <None Include="Script7.fsx" />
+  </ItemGroup>
+</Project>

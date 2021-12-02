@@ -1,0 +1,3 @@
+﻿
+#load "Result.Extension.fs"
+
