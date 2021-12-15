@@ -166,23 +166,6 @@ module Returns =
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
-    /// Maps the given function over all existing warning and failure messages of a <c>Returns</c> (result) container (if any).
-    /// It works as a sort of Trasformation/Conversion Function of the warning and failure message type.
-    /// </summary>
-    /// <param name="conversionFunction">The conversion function (common for both the Warning and Error Message).</param>
-    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let mapMessages (conversionFunction: 'TMessage1 -> 'TMessage2) (returns : Returns<'TSuccess,'TMessage1>) = 
-        match returns with 
-        | Success (x,msgs) -> 
-            let msgs' = List.map conversionFunction msgs
-            Success (x, msgs')
-        | Failure errors -> 
-            let errors' = List.map conversionFunction errors
-            Failure errors'
-
-    // -------------------------------------------------------------------------------------- //
-
-    /// <summary>
     /// Creates a safe version of the supplied function, 
     /// applying the given function to the specified input Value and 
     /// catch its output as a <c>Returns</c> (result) container, 
@@ -236,7 +219,7 @@ module Returns =
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result)) type.</param>
     /// <returns>Returns True if the input <c>Returns</c> (result) container is a Failure, otherwise False if it is a Success.</returns>
-    let isFailed (returns : Returns<'TSuccess,'TMessage>) = 
+    let isFailure (returns : Returns<'TSuccess,'TMessage>) = 
         match returns with
         | Failure _ -> true
         | _ -> false
@@ -253,18 +236,14 @@ module Returns =
 
     // -------------------------------------------------------------------------------------- //
 
-    let private tupleToList t = 
-        if Microsoft.FSharp.Reflection.FSharpType.IsTuple(t.GetType()) 
-            then Some (Microsoft.FSharp.Reflection.FSharpValue.GetTupleFields t |> Array.toList)
-            else None
-    
-    let private listToTuple l =
-        let l' = List.toArray l
-        let types = l' |> Array.map (fun o -> o.GetType())
-        let tupleType = Microsoft.FSharp.Reflection.FSharpType.MakeTupleType types
-        Microsoft.FSharp.Reflection.FSharpValue.MakeTuple (l' , tupleType)
-    
-    // -------------------------------------------------------------------------------------- //
+    /// <summary>
+    /// Takes a <c>Returns</c> (result) container and transform it into an Option container.
+    /// </summary>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    let toOption (returns : Returns<'TSuccess,'TMessage>)  = 
+        match returns with
+        | Success (value,warns) -> Some (value,warns)
+        | Failure (_) -> Option.None
 
     /// <summary>
     /// Takes a Option and transform it into an <c>Returns</c> (result) container.
@@ -277,25 +256,7 @@ module Returns =
         | Some x -> ok x
         | None -> fail failureMesssage 
 
-    /// <summary>
-    /// Takes a <c>Returns</c> (result) container and transform it into an Option container.
-    /// </summary>
-    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let toOption (returns : Returns<'TSuccess,'TMessage>)  = 
-        match returns with
-        | Success (value,warns) -> Some (value,warns)
-        | Failure (_) -> Option.None
-
     // -------------------------------------------------------------------------------------- //
-
-    /// <summary>
-    /// Converts a Choice into a r<c>Returns</c> (result) container.
-    /// </summary>
-    /// <param name="choice">The input choice type.</param>
-    let ofChoice (choice : Choice<'TSuccess,'TMessage list>) =
-        match choice with
-        | Choice1Of2 value -> ok value
-        | Choice2Of2 errors -> failmany errors
 
     /// <summary>
     /// Converts a <c>Returns</c> (result) container into a Choice container.
@@ -306,15 +267,16 @@ module Returns =
         | Success (value,warns) -> Choice1Of2 (value,warns)
         | Failure (errors) -> Choice2Of2 errors
 
-    // -------------------------------------------------------------------------------------- //
-
     /// <summary>
-    /// Converts a Result into a <c>Returns</c> (result) container.
+    /// Converts a Choice into a r<c>Returns</c> (result) container.
     /// </summary>
-    let ofResult ( result: Result<'TSuccess,'TMessage list>) =
-        match result with
-        | Result.Ok value -> ok value
-        | Result.Error errors -> failmany errors
+    /// <param name="choice">The input choice type.</param>
+    let ofChoice (choice : Choice<'TSuccess,'TMessage list>) =
+        match choice with
+        | Choice1Of2 value -> ok value
+        | Choice2Of2 errors -> failmany errors
+
+    // -------------------------------------------------------------------------------------- //
 
     /// <summary>
     /// Converts a <c>Returns</c> (result) container into a Choice.
@@ -324,7 +286,15 @@ module Returns =
         match returns with
         | Success (value,warns) -> Result.Ok (value, warns)
         | Failure (errors) -> Result.Error errors
-    
+
+    /// <summary>
+    /// Converts a Result into a <c>Returns</c> (result) container.
+    /// </summary>
+    let ofResult ( result: Result<'TSuccess,'TMessage list>) =
+        match result with
+        | Result.Ok value -> ok value
+        | Result.Error errors -> failmany errors
+
     // -------------------------------------------------------------------------------------- //
 
     // ********************
@@ -342,7 +312,7 @@ module Returns =
     /// <param name="fFailure">Function to be applied to source, if it contains a Failure value.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     /// <returns>The result of applying either functions.</returns>
-    let inline either (fSuccess) (fFailure) (returns) = 
+    let inline either (fSuccess) (fFailure) (returns : Returns<'TSuccess,'TMessage>)  = 
         match returns with
         | Success(s, msgs) -> fSuccess (s, msgs)
         | Failure(errs) -> fFailure (errs)
@@ -451,6 +421,23 @@ module Returns =
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
+    /// Maps the given function over all existing warning and failure messages of a <c>Returns</c> (result) container (if any).
+    /// It works as a sort of Trasformation/Conversion Function of the warning and failure message type.
+    /// </summary>
+    /// <param name="conversionFunction">The conversion function (common for both the Warning and Error Message).</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    let mapMessages (conversionFunction: 'TMessage1 -> 'TMessage2) (returns : Returns<'TSuccess,'TMessage1>) = 
+        match returns with 
+        | Success (x,msgs) -> 
+            let msgs' = List.map conversionFunction msgs
+            Success (x, msgs')
+        | Failure errors -> 
+            let errors' = List.map conversionFunction errors
+            Failure errors'
+
+    // -------------------------------------------------------------------------------------- //
+
+    /// <summary>
     /// Takes a given function ('TSuccess1 -> 'TSuccess2 -> 'TSuccess3) and an input <c>Returns</c> (result) container, then:
     ///
     /// if the two input <c>Returns</c> (result) container are a Success, maps their Success Values with the given "fSuccess" function. Any of its warning messages are propagated;
@@ -460,10 +447,12 @@ module Returns =
     /// <param name="successFunction">The given function to be applied to the input Success Value.</param>
     /// <param name="returns1">The first input <c>Returns</c> (result) type.</param>
     /// <param name="returns2">The second input <c>Returns</c> (result) type.</param>
-    let inline map2 (successFunction : 'TSuccess1 -> 'TSuccess2 -> 'TSuccess3) (returns1 : Returns<'TSuccess1,'TMessage>) (returns2 : Returns<'TSuccess2,'TMessage>) = 
+    let inline map2 (successFunction : 'TSuccess1 -> 'TSuccess2 -> 'TSuccess3) 
+                    (returns1 : Returns<'TSuccess1,'TMessage>) 
+                    (returns2 : Returns<'TSuccess2,'TMessage>) = 
         //successFunction <!> return1 <*> return2
-        returns1
-        |> map successFunction
+        ok successFunction
+        |> apply <| returns1
         |> apply <| returns2
         //match returns1, returns2 with 
         //| Success (a,msga), Ok (bmsgsb) -> Ok (f returns1 returns1) 
@@ -480,12 +469,15 @@ module Returns =
     /// ( Synonym of "lift" <see cref="lift"/> ).
     /// 
     /// The function is applied to the first returns argument, then to the second returns argument, then to the third returns argument.
-    let inline map3 successFunction return1 return2 return3 = 
+    let inline map3 successFunction 
+                    (returns1 : Returns<'TSuccess1,'TMessage>) 
+                    (returns2 : Returns<'TSuccess2,'TMessage>)
+                    (returns3 : Returns<'TSuccess2,'TMessage>) = 
         // successFunction <!> return1 <*> return2 <*> return3
-        return1
-        |> map successFunction
-        |> apply <| return2
-        |> apply <| return3
+        ok successFunction
+        |> apply <| returns1
+        |> apply <| returns2
+        |> apply <| returns3
 
     // -------------------------------------------------------------------------------------- //
 
@@ -498,13 +490,16 @@ module Returns =
     /// ( Synonym of "lift" <see cref="lift"/> ).
     /// 
     /// The function is applied to the first returns argument, then to the second returns argument, then to the third returns argument, then to the fourth returns argument.
-    let inline map4 successFunction return1 return2 return3 return4 = 
-        //successFunction <!> return1 <*> return2 <*> return3 <*> return4
-        return1
-        |> map successFunction
-        |> apply return2
-        |> apply return3
-        |> apply return4
+    let inline map4 successFunction (returns1 : Returns<'TSuccess1,'TMessage>) 
+                                    (returns2 : Returns<'TSuccess2,'TMessage>)
+                                    (returns3 : Returns<'TSuccess2,'TMessage>) 
+                                    (returns4 : Returns<'TSuccess2,'TMessage>) = 
+        // successFunction <!> return1 <*> return2 <*> return3
+        ok successFunction
+        |> apply <| returns1
+        |> apply <| returns2
+        |> apply <| returns3
+        |> apply <| returns4
 
     // -------------------------------------------------------------------------------------- //
 
@@ -536,15 +531,16 @@ module Returns =
     ///
     /// Otherwise the existing error messages of one of the two function and input <c>Returns</c> (result) container are propagated.
     /// </summary>
-    /// <param name="addSuccess">The given function that define the mergin operation.</param>
+    /// <param name="addSuccess">The given function that define the mergin operation on success values.</param>
+    /// <param name="addFailure">The given function that define the mergin operation on erro messages.</param>
     /// <param name="returns1">The first input <c>Returns</c> (result) type.</param>
     /// <param name="returns2">The second input <c>Returns</c> (result) type.</param>
-    let inline merge addSuccess (returns1 : Returns<'TSuccess1,'TMessage>) (returns2 : Returns<'TSuccess2,'TMessage>) : Returns<'TSuccess3,'TMessage> = 
+    let inline merge (addSuccess) (addFailure) (returns1 : Returns<'TSuccess1,'TMessage>) (returns2 : Returns<'TSuccess2,'TMessage>) : Returns<'TSuccess3,'TMessage> = 
         match (returns1, returns2) with
         | Success (s1,msgs1), Success (s2,msgs2) -> Success ( addSuccess s1 s2, msgs1 @ msgs2 )
         | Failure errs, Success(_, _) -> Failure(errs)
         | Success(_, _), Failure errs -> Failure(errs)
-        | Failure errs1, Failure errs2 -> Failure(errs1 @ errs2)
+        | Failure errs1, Failure errs2 -> Failure( addFailure errs1 errs2 )
 
     // -------------------------------------------------------------------------------------- //
     
@@ -586,7 +582,9 @@ module Returns =
         use e = returns.GetEnumerator()
         let mutable state = state
         while e.MoveNext() do
-            state <- merge folder state e.Current
+            let addSuccess stateOk currentOk = folder stateOk currentOk
+            let addFailure stateError currentError = stateError @ currentError
+            state <- merge addSuccess addFailure state e.Current
         state
 
     // -------------------------------------------------------------------------------------- //
@@ -650,23 +648,6 @@ module Returns =
 
     // -------------------------------------------------------------------------------------- //
 
-    /// <summary>
-    /// Creates two lists by classifying the values depending on whether they were wrapped with Ok or Error.
-    /// </summary>
-    /// <returns>
-    /// A tuple with both resulting lists, Oks are in the first list.
-    /// </returns>
-    //let partition (returns: list<Result<'TSuccess, 'TMessage>>) =
-    //    let rec loop ((acc1, acc2) as acc) = function
-    //        | [] -> acc
-    //        | x::xs ->
-    //            match x with
-    //            | Success (v,msgs) -> loop ((v,msgs)::acc1, acc2) xs
-    //            | Failure e -> loop (acc1, e::acc2) xs
-    //    loop ([], []) (List.rev returns)
-
-    // -------------------------------------------------------------------------------------- //
-
     // ********************
     // **    SPECIAL     **
     // ********************
@@ -724,9 +705,48 @@ module Returns =
 
     /// Applies the given "dead-end function" to a "value" and return the input "value" ignoring the results of the given function.
     /// (">=> toSwitchFunction" is exactly the same as ">> map").
-    let inline tee (successFunction: 'TSuccess1 -> 'TSuccess2) (value: 'TSuccess1) = 
+    let tee (successFunction: 'TSuccess1 -> 'TSuccess2) (value: 'TSuccess1) = 
         successFunction value |> ignore
         value
+
+    // -------------------------------------------------------------------------------------- //
+
+    /// <summary>
+    /// Creates two lists by classifying the values depending on whether they were wrapped with Ok or Error.
+    /// </summary>
+    /// <returns>
+    /// A tuple with both resulting lists, Oks are in the first list.
+    /// </returns>
+    let partition (returns: list<Returns<'TSuccess, 'TMessage>>) =
+        let rec loop ((acc1, acc2) as acc) = function
+            | [] -> acc
+            | x::xs ->
+                match x with
+                | Success (v,msgs) -> loop ((v,msgs)::acc1, acc2) xs
+                | Failure e -> loop (acc1, e::acc2) xs
+        loop ([], []) (List.rev returns)
+
+    // -------------------------------------------------------------------------------------- //
+
+    /// Takes two results and returns a tuple of the pair
+    let zip x1 x2 =
+        match x1, x2 with
+        | Success (x1res,msgs1) , Success (x2res,msgs2) -> Success( (x1res, x2res), msgs1 @ msgs2 )
+        | Failure f, _ -> Failure f
+        | _, Failure f -> Failure f
+
+    // -------------------------------------------------------------------------------------- //
+
+    let private tupleToList t = 
+        if Microsoft.FSharp.Reflection.FSharpType.IsTuple(t.GetType()) 
+            then Some (Microsoft.FSharp.Reflection.FSharpValue.GetTupleFields t |> Array.toList)
+            else None
+    
+    let private listToTuple l =
+        let l' = List.toArray l
+        let types = l' |> Array.map (fun o -> o.GetType())
+        let tupleType = Microsoft.FSharp.Reflection.FSharpType.MakeTupleType types
+        Microsoft.FSharp.Reflection.FSharpValue.MakeTuple (l' , tupleType)
 
     // -------------------------------------------------------------------------------------- //
 
