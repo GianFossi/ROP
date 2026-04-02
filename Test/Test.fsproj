@@ -13,4 +13,8 @@
   <ItemGroup>
     <ProjectReference Include="..\ROP\ROP.fsproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Expecto" Version="9.0.4" />
+  </ItemGroup>
 </Project>
