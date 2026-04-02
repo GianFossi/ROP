@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
-    <TargetFramework>net472</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <Authors>Gian-Luca ANFOSSI</Authors>
     <Company>Ganfoss</Company>
     <PackageIcon>ROP.ico</PackageIcon> 
