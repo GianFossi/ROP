@@ -136,7 +136,7 @@ let returnsFailOnWarningsTests =
             Expect.equal (failureMessages r) ["w"] "should carry warning as error"
         }
 
-        test "failOnWarnings converts Success without warnings to Failure" {
+        test "failOnWarnings converts Success with no warnings to Failure with empty errors" {
             let r = Returns.ok 1 |> Returns.failOnWarnings
             Expect.isTrue (isFailure r) "should become Failure"
             Expect.equal (failureMessages r) [] "should have empty error list"
@@ -313,6 +313,7 @@ let returnsBindTests =
             match r with
             | Success (v, msgs) ->
                 Expect.equal v 4 "value should be 4"
+                // bind uses jointMessages which appends prior warnings after the new ones: ["w2"] @ ["w1"]
                 Expect.equal msgs ["w2";"w1"] "both warnings present"
             | _ -> failtest "Expected Success"
         }
