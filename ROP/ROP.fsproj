@@ -20,6 +20,13 @@
     </None>
     <None Include="Validate %28OBSOLETE%29.fs" />
     <Compile Include="Validation.fs" />
+    <Compile Include="Vessel\Geometry3D.fs" />
+    <Compile Include="Vessel\Material.fs" />
+    <Compile Include="Vessel\DesignCondition.fs" />
+    <Compile Include="Vessel\WeldJoint.fs" />
+    <Compile Include="Vessel\ComponentGeometry.fs" />
+    <Compile Include="Vessel\Component.fs" />
+    <Compile Include="Vessel\VesselGraph.fs" />
     <None Include="Example.Result.fsx" />
     <None Include="Examples.Returns.General.fsx" />
     <None Include="Examples.Returns.Validation.Series.fsx" />
