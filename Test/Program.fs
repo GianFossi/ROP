@@ -854,17 +854,14 @@ let returnsValidateAllTests =
         }
 
         test "validateAll collects ALL errors when multiple validators fail" {
+            // Use validators that can fail independently on the same input
             let validators = [
-                fun v -> if v > 0   then Returns.ok () else Returns.fail "must be positive"
-                fun v -> if v < 100 then Returns.ok () else Returns.fail "must be < 100"
+                fun v -> if v > 0      then Returns.ok () else Returns.fail "must be positive"
+                fun v -> if v % 2 = 0  then Returns.ok () else Returns.fail "must be even"
             ]
             let r = Returns.validateAll validators -5
             Expect.isTrue (isFailure r) "should be Failure"
-            Expect.equal (failureMessages r) ["must be positive"] "first error collected"
-            let r2 = Returns.validateAll validators 200
-            Expect.equal (failureMessages r2) ["must be < 100"] "second error collected"
-            let r3 = Returns.validateAll validators -200
-            Expect.equal (failureMessages r3) ["must be positive";"must be < 100"] "both errors collected"
+            Expect.equal (failureMessages r) ["must be positive";"must be even"] "both errors collected"
         }
 
         test "validateAll merges warnings from all passing validators" {
