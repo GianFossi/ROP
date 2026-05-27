@@ -48,18 +48,11 @@ type Returns<'TSuccess, 'TMessage> =
     /// Convert this <c>Returns</c> (result) container into a string.
     /// </summary>
     override this.ToString() =
-        
-        // Print all Messages.
-        let rec print acc (msgs: _ list) =
-            match msgs with
-            | [] -> acc
-            | x::xs when xs.Length = 0 -> print (acc + x.ToString()) xs
-            | x::xs -> print (acc + x.ToString() + "; ") xs 
-
-        // Define what to Print.
+        let printMsgs msgs =
+            msgs |> List.map (fun x -> x.ToString()) |> String.concat "; "
         match this with
-        | Success(value,msgs) -> sprintf "Success: %A - %s" value ( print String.Empty msgs )
-        | Failure(msgs) -> sprintf "Failure: %s" ( print String.Empty msgs )    
+        | Success(value, msgs) -> sprintf "Success: %A - %s" value (printMsgs msgs)
+        | Failure(msgs)        -> sprintf "Failure: %s" (printMsgs msgs)
 
 // ****************************************************************************************************** //
 // ****************************************************************************************************** //
