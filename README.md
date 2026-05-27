@@ -1,222 +1,194 @@
-<div id="top"></div>
-
-<!-- PROJECT SHIELDS -->
-<!--
-*** I'm using markdown "reference style" links for readability.
-*** Reference links are enclosed in brackets [ ] instead of parentheses ( ).
-*** See the bottom of this document for the declaration of the reference variables
-*** for contributors-url, forks-url, etc. This is an optional, concise syntax you may use.
-*** https://www.markdownguide.org/basic-syntax/#reference-style-links
--->
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
-[![LinkedIn][linkedin-shield]][linkedin-url]
-
-
-
-<!-- PROJECT LOGO -->
-<br />
-<div align="center">
-  <a href="https://github.com/GianFossi/ROP">
-    <img src="images/logo.png" alt="Logo" width="80" height="80">
-  </a>
-
-<h3 align="center">project_title</h3>
-
-  <p align="center">
-    project_description
-    <br />
-    <a href="https://github.com/GianFossi/ROP"><strong>Explore the docs »</strong></a>
-    <br />
-    <br />
-    <a href="https://github.com/GianFossi/ROP">View Demo</a>
-    ·
-    <a href="https://github.com/GianFossi/ROP/issues">Report Bug</a>
-    ·
-    <a href="https://github.com/GianFossi/ROP/issues">Request Feature</a>
-  </p>
-</div>
-
+# ROP (Railway-Oriented Programming in F#)
+
+This repository contains an F# library that implements a Railway-Oriented Programming model around a custom `Returns<'TSuccess,'TMessage>` type, plus helper modules, validation utilities, examples, and an Expecto test suite.
+
+## What this codebase provides
+
+- A custom **result container** with three practical states:
+  - `Success(value, warnings)`
+  - `Failure(errors)`
+- Functional combinators to compose validations and business rules:
+  - sequential (`>>=`, `>=>`, `<=<`)
+  - applicative (`<!>`, `<*>`)
+  - parallel validation (`&&&`, `and!` in computation expression)
+- Utility extensions for standard F# types:
+  - `Result` extensions
+  - `Choice` extensions
+  - `Option` extensions
+- A separate `Validation` module for record/property-level validators.
 
+---
 
-<!-- TABLE OF CONTENTS -->
-<details>
-  <summary>Table of Contents</summary>
-  <ol>
-    <li>
-      <a href="#about-the-project">About The Project</a>
-      Railway Object Programming to to ensure every function or method should and must always return a success or a failure.
-      <ul>
-        <li><a href="#built-with">Built With</a></li>
-      </ul>
-    </li>
-    <li>
-      <a href="#getting-started">Getting Started</a>
-      <ul>
-        <li><a href="#prerequisites">Prerequisites</a></li>
-        <li><a href="#installation">Installation</a></li>
-      </ul>
-    </li>
-    <li><a href="#usage">Usage</a></li>
-    <li><a href="#roadmap">Roadmap</a></li>
-    <li><a href="#contributing">Contributing</a></li>
-    <li><a href="#license">License</a></li>
-    <li><a href="#contact">Contact</a></li>
-    <li><a href="#acknowledgments">Acknowledgments</a></li>
-  </ol>
-</details>
+## Technology stack
 
+- **Language**: F#
+- **Runtime**: .NET 8 (`TargetFramework: net8.0`)
+- **Library project**: `/tmp/workspace/GianFossi/ROP/ROP/ROP.fsproj`
+- **Tests**: Expecto (`/tmp/workspace/GianFossi/ROP/Test/Test.fsproj`)
+- **Solution**: `/tmp/workspace/GianFossi/ROP/ROP.sln`
 
+---
 
-<!-- ABOUT THE PROJECT -->
-## About The Project
+## Repository structure
 
-[![Product Name Screen Shot][product-screenshot]](https://example.com)
+```text
+/tmp/workspace/GianFossi/ROP
+├── ROP.sln
+├── README.md
+├── ROP/
+│   ├── ROP.fsproj
+│   ├── Returns.fs
+│   ├── Validation.fs
+│   ├── Result.Extension.fs
+│   ├── Choice.Extension.fs
+│   ├── Option.Extension.fs
+│   ├── Example.Result.fsx
+│   ├── Examples.Returns.General.fsx
+│   ├── Examples.Returns.Validation.Series.fsx
+│   ├── Examples.Returns.Validation.Parallel.1.fsx
+│   ├── Examples.Returns.Validation.Parallel.2.fsx
+│   └── Examples.Returns.HeatExchanger.fsx
+├── Test/
+│   ├── Test.fsproj
+│   └── Program.fs
+└── Setup/
+    └── Setup.vdproj
+```
 
-Railway Object Programming to to ensure every function or method should and must always return a success or a failure.
+---
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+## How the core library is organized
 
+### 1) `Returns.fs` (core)
 
+`Returns.fs` is the central file. It defines:
 
-### Built With
+- `type Returns<'TSuccess,'TMessage> = Success of ... | Failure of ...`
+- Module `Returns` with constructors, transformations, composition, and utility helpers.
+- Operators under `Returns.Operators`.
+- `ReturnsBuilder` computation expression (`returns { ... }`) with support for `and!` parallel binding.
 
-* [Next.js](https://nextjs.org/)
-* [React.js](https://reactjs.org/)
-* [Vue.js](https://vuejs.org/)
-* [Angular](https://angular.io/)
-* [Svelte](https://svelte.dev/)
-* [Laravel](https://laravel.com)
-* [Bootstrap](https://getbootstrap.com)
-* [JQuery](https://jquery.com)
+#### Key functional groups inside `Returns`
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+- Creation: `ok`, `warn`, `warnmany`, `fail`, `failmany`
+- Classification: `isSucceeded`, `isFailure`, `hasWarnings`
+- Conversion: `toOption/ofOption`, `toChoice/ofChoice`, `toResult/ofResult`
+- Composition:
+  - Sequential: `bind`, `compose`, `>>=`, `>=>`, `<=<`
+  - Applicative: `apply`, `map`, `map2`, `map3`, `map4`, `<!>`, `<*>`
+  - Parallel: `plus`, `&&&`, `validateAll`
+- Message handling: `jointMessages`, `mapMessages`, `mapWarnings`, `mapErrors`, `warnIf`
+- Collection helpers: `traverseList`, `sequenceList`, `partition`, `zip`, `fold`
 
+---
 
+### 2) `Validation.fs` (validator DSL)
 
-<!-- GETTING STARTED -->
-## Getting Started
+`Validation.fs` defines a validator builder for richer object/record validation:
 
-This is an example of how you may give instructions on setting up your project locally.
-To get a local copy up and running follow these simple example steps.
+- `ValidationItem`, `ValidationState` (`Ok | Errors`)
+- Validator combinators for scalar, optional, collection, and nested values
+- `createValidatorFor<'T>() { ... }` DSL
 
-### Prerequisites
+Example capabilities include:
 
-This is an example of how to list things you need to use the software and how to install them.
-* npm
-  ```sh
-  npm install npm@latest -g
-  ```
+- `validate`, `validateWhen`
+- `validateRequired`, `validateUnrequired`
+- `validateSingleCaseUnion`, `validateUnion`
+- Primitive validators like `isGreaterThan`, `isNotEmpty`, `isNotEmptyOrWhitespace`
 
-### Installation
+---
 
-1. Get a free API Key at [https://example.com](https://example.com)
-2. Clone the repo
-   ```sh
-   git clone https://github.com/github_username/repo_name.git
-   ```
-3. Install NPM packages
-   ```sh
-   npm install
-   ```
-4. Enter your API in `config.js`
-   ```js
-   const API_KEY = 'ENTER YOUR API';
-   ```
+### 3) Extension modules
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+- `Result.Extension.fs`: additional helpers for `Result<'T,'E>` (`defaultValue`, `either`, `apply`, `mapError`, `toChoice`, etc.)
+- `Choice.Extension.fs`: helpers for `Choice<'T,'E>` (`apply`, `map2`, `bind`, `bindChoice2Of2`, `either`, etc.)
+- `Option.Extension.fs`: helpers for `option<'T>` (`apply`, `zip`, `toResultWith`, `protect`, etc.)
 
+These modules are independent utility layers and can be used outside the `Returns` workflow.
 
+---
 
-<!-- USAGE EXAMPLES -->
-## Usage
+## Detailed usage examples from this repository
 
-Use this space to show useful examples of how a project can be used. Additional screenshots, code examples and demos work well in this space. You may also link to more resources.
+### A) Sequential validation (short-circuit with warning propagation)
 
-_For more examples, please refer to the [Documentation](https://example.com)_
+From `Examples.Returns.General.fsx`:
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+- `checkIsEven`, `checkIsNegative`, `checkIsLargerThan10` each return `Returns<int, Messages>`
+- They are composed sequentially with:
+  - `Returns.ok 9 >>= checkIsEven >>= checkIsNegative >>= checkIsLargerThan10`
+  - or function composition `checkIsEven >=> checkIsNegative >=> checkIsLargerThan10`
 
+This pattern stops at failure while keeping accumulated warnings/errors already produced.
 
+### B) Parallel validation (accumulate failures)
 
-<!-- ROADMAP -->
-## Roadmap
+From `Examples.Returns.Validation.Series.fsx` and `Returns.fs` operator `&&&`:
 
-- [] Feature 1
-- [] Feature 2
-- [] Feature 3
-    - [] Nested Feature
+- `validate1 &&& validate2 &&& validate3`
+- All validators run against the same input
+- If multiple validations fail, their error lists are concatenated
 
-See the [open issues](https://github.com/github_username/repo_name/issues) for a full list of proposed features (and known issues).
+Useful for form-style validation where you want to report all issues at once.
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+### C) Applicative construction with `<*>`
 
+From `Examples.Returns.Validation.Parallel.1.fsx`:
 
+- `create x y = fun a b -> (a,b) <!> check1 x <*> check2 y`
+- Both arguments are validated independently
+- You get either a constructed value or merged failures
 
-<!-- CONTRIBUTING -->
-## Contributing
+This is ideal for validating constructor arguments in parallel.
 
-Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
+### D) Realistic domain example (ingredient checks)
 
-If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
-Don't forget to give the project a star! Thanks again!
+From `Examples.Returns.HeatExchanger.fsx`:
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+- Domain type: `Ingredient = { Name; Quantity; UMeasure }`
+- Name and quantity validators are composed from smaller modules (`CheckStrings`, `CheckNumbers`)
+- Errors are remapped to domain-specific messages
+- Final constructor `Ingredient.Create(...)` combines validated inputs and applies formatting
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+This demonstrates layering generic validators into domain-specific business rules.
 
+---
 
+## Test organization
 
-<!-- LICENSE -->
-## License
+Tests are in `/tmp/workspace/GianFossi/ROP/Test/Program.fs` and grouped by behavior:
 
-Distributed under the MIT License. See `LICENSE.txt` for more information.
+- `Returns - Creation`, `Predicates`, `Conversions`, `bind`, `apply`, `map`, `&&&`, etc.
+- `ReturnsBuilder - computation expression` and `and! parallel binding`
+- `Result.Extension`, `Choice.Extension`, `Option.Extension`
+- `Validation - Basic Validators`, `Collection Validators`, `ValidatorBuilder`
+- `Integration - End-to-end`
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+The test entry point composes all test lists into a single `All Tests` suite.
 
+---
 
+## Build and run
 
-<!-- CONTACT -->
-## Contact
+From repository root:
 
-Your Name - [@twitter_handle](https://twitter.com/twitter_handle) - email@email_client.com
+```bash
+dotnet build /tmp/workspace/GianFossi/ROP/ROP.sln
+```
 
-Project Link: [https://github.com/github_username/repo_name](https://github.com/github_username/repo_name)
+To execute the Expecto test executable:
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+```bash
+dotnet run --project /tmp/workspace/GianFossi/ROP/Test/Test.fsproj
+```
 
+---
 
+## Where to start reading the code
 
-<!-- ACKNOWLEDGMENTS -->
-## Acknowledgments
+1. `/tmp/workspace/GianFossi/ROP/ROP/Returns.fs` — core type + operators + CE builder
+2. `/tmp/workspace/GianFossi/ROP/ROP/Validation.fs` — validator DSL
+3. `/tmp/workspace/GianFossi/ROP/ROP/Examples.Returns.General.fsx` — quick mental model
+4. `/tmp/workspace/GianFossi/ROP/Test/Program.fs` — behavior coverage and edge cases
 
-* []()
-* []()
-* []()
-
-<p align="right">(<a href="#top">back to top</a>)</p>
-
-
-
-<!-- MARKDOWN LINKS & IMAGES -->
-<!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
-[contributors-shield]: https://img.shields.io/github/contributors/github_username/repo_name.svg?style=for-the-badge
-[contributors-url]: https://github.com/github_username/repo_name/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/github_username/repo_name.svg?style=for-the-badge
-[forks-url]: https://github.com/github_username/repo_name/network/members
-[stars-shield]: https://img.shields.io/github/stars/github_username/repo_name.svg?style=for-the-badge
-[stars-url]: https://github.com/github_username/repo_name/stargazers
-[issues-shield]: https://img.shields.io/github/issues/github_username/repo_name.svg?style=for-the-badge
-[issues-url]: https://github.com/github_username/repo_name/issues
-[license-shield]: https://img.shields.io/github/license/github_username/repo_name.svg?style=for-the-badge
-[license-url]: https://github.com/github_username/repo_name/blob/master/LICENSE.txt
-[linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
-[linkedin-url]: https://linkedin.com/in/linkedin_username
-[product-screenshot]: images/screenshot.png
