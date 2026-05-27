@@ -764,6 +764,173 @@ let returnsBuilderTests =
         }
     ]
 
+let returnsWarnIfTests =
+    testList "Returns - warnIf" [
+
+        test "warnIf appends warning when predicate holds" {
+            let r = Returns.ok 5 |> Returns.warnIf (fun v -> v > 3) "above threshold"
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 5 "value unchanged"
+                Expect.equal msgs ["above threshold"] "warning appended"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "warnIf does not append warning when predicate does not hold" {
+            let r = Returns.ok 1 |> Returns.warnIf (fun v -> v > 3) "above threshold"
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 1 "value unchanged"
+                Expect.equal msgs [] "no warning"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "warnIf passes Failure through unchanged" {
+            let r = Returns.fail "err" |> Returns.warnIf (fun _ -> true) "w"
+            Expect.isTrue (isFailure r) "should remain Failure"
+            Expect.equal (failureMessages r) ["err"] "error unchanged"
+        }
+
+        test "warnIf accumulates on existing warnings" {
+            let r = Returns.warn "w1" 5 |> Returns.warnIf (fun v -> v > 3) "w2"
+            match r with
+            | Success (_, msgs) -> Expect.equal msgs ["w1";"w2"] "both warnings present"
+            | _ -> failtest "Expected Success"
+        }
+    ]
+
+let returnsMapWarningsErrorsTests =
+    testList "Returns - mapWarnings / mapErrors" [
+
+        test "mapWarnings transforms warnings on Success" {
+            let r = Returns.warn "w" 42 |> Returns.mapWarnings (fun m -> m + "!")
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 42 "value unchanged"
+                Expect.equal msgs ["w!"] "warning transformed"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "mapWarnings leaves Failure unchanged" {
+            let r = Returns.fail "err" |> Returns.mapWarnings (fun m -> m + "!")
+            Expect.equal (failureMessages r) ["err"] "error untouched"
+        }
+
+        test "mapErrors transforms errors on Failure" {
+            let r = Returns.fail "err" |> Returns.mapErrors (fun m -> "[E] " + m)
+            Expect.equal (failureMessages r) ["[E] err"] "error transformed"
+        }
+
+        test "mapErrors leaves Success warnings unchanged" {
+            let r = Returns.warn "w" 42 |> Returns.mapErrors (fun m -> m + "!")
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 42 "value unchanged"
+                Expect.equal msgs ["w"] "warning untouched"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "mapMessages transforms both warnings and errors" {
+            let rOk  = Returns.warn "w" 1 |> Returns.mapMessages (fun m -> m + "!")
+            let rErr = Returns.fail "e"   |> Returns.mapMessages (fun m -> m + "!")
+            match rOk with
+            | Success (_, msgs) -> Expect.equal msgs ["w!"] "warning transformed"
+            | _ -> failtest "Expected Success"
+            Expect.equal (failureMessages rErr) ["e!"] "error transformed"
+        }
+    ]
+
+let returnsValidateAllTests =
+    testList "Returns - validateAll" [
+
+        test "validateAll returns Success when all validators pass" {
+            let validators = [
+                fun v -> if v > 0   then Returns.ok () else Returns.fail "must be positive"
+                fun v -> if v < 100 then Returns.ok () else Returns.fail "must be < 100"
+            ]
+            let r = Returns.validateAll validators 42
+            Expect.isTrue (isSuccess r) "should be Success"
+            Expect.equal (successValue r) 42 "original value preserved"
+        }
+
+        test "validateAll collects ALL errors when multiple validators fail" {
+            let validators = [
+                fun v -> if v > 0   then Returns.ok () else Returns.fail "must be positive"
+                fun v -> if v < 100 then Returns.ok () else Returns.fail "must be < 100"
+            ]
+            let r = Returns.validateAll validators -5
+            Expect.isTrue (isFailure r) "should be Failure"
+            Expect.equal (failureMessages r) ["must be positive"] "first error collected"
+            let r2 = Returns.validateAll validators 200
+            Expect.equal (failureMessages r2) ["must be < 100"] "second error collected"
+            let r3 = Returns.validateAll validators -200
+            Expect.equal (failureMessages r3) ["must be positive";"must be < 100"] "both errors collected"
+        }
+
+        test "validateAll merges warnings from all passing validators" {
+            let validators = [
+                fun v -> if v > 50 then Returns.warn "near upper limit" () else Returns.ok ()
+                fun v -> if v > 90 then Returns.warn "very high"        () else Returns.ok ()
+            ]
+            let r = Returns.validateAll validators 95
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 95 "value preserved"
+                Expect.equal msgs ["near upper limit";"very high"] "all warnings collected"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "validateAll with empty validator list returns Success" {
+            let r = Returns.validateAll [] 42
+            Expect.equal (successValue r) 42 "value unchanged"
+        }
+    ]
+
+let returnsAndBangTests =
+    testList "ReturnsBuilder - and! parallel binding" [
+
+        test "and! combines two Successes accumulating warnings" {
+            let r = returns {
+                let! x = Returns.warn "wx" 3
+                and! y = Returns.warn "wy" 4
+                return x + y
+            }
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 7 "values combined"
+                Expect.equal msgs ["wx";"wy"] "both warnings present"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "and! accumulates errors from both branches instead of short-circuiting" {
+            let r : Returns<int,string> = returns {
+                let! _ = Returns.fail "e1"
+                and! _ = Returns.fail "e2"
+                return 0
+            }
+            Expect.equal (failureMessages r) ["e1";"e2"] "both errors accumulated"
+        }
+
+        test "and! propagates single failure when only one branch fails" {
+            let r : Returns<int,string> = returns {
+                let! x = Returns.ok 10
+                and! _ = Returns.fail "e1"
+                return x
+            }
+            Expect.equal (failureMessages r) ["e1"] "failure propagated"
+        }
+
+        test "and! supports three parallel bindings" {
+            let r = returns {
+                let! a = Returns.ok 1
+                and! b = Returns.ok 2
+                and! c = Returns.ok 3
+                return a + b + c
+            }
+            Expect.equal (successValue r) 6 "three values combined"
+        }
+    ]
+
 // ============================================================
 // Result.Extension module tests
 // ============================================================
@@ -1653,6 +1820,10 @@ let main argv =
             returnsActivePatternTests
             returnsToStringTests
             returnsBuilderTests
+            returnsWarnIfTests
+            returnsMapWarningsErrorsTests
+            returnsValidateAllTests
+            returnsAndBangTests
             resultExtensionTests
             choiceExtensionTests
             optionExtensionTests

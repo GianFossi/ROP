@@ -87,8 +87,20 @@ module Returns =
     /// </summary>
     /// <param name="msgs">The list of Warning Message associated to the Success value.</param>
     /// <param name="x">The Success value.</param>
-    let warnmany<'TSuccess,'TMessage> (msgs:'TMessage seq) (x:'TSuccess) : Returns<'TSuccess,'TMessage> = 
+    let warnmany<'TSuccess,'TMessage> (msgs:'TMessage seq) (x:'TSuccess) : Returns<'TSuccess,'TMessage> =
         Success(x,msgs |> Seq.toList )
+
+    /// <summary>
+    /// Appends a single warning to the current Success value if the predicate holds; passes through unchanged otherwise.
+    /// Failures are always propagated unchanged.
+    /// </summary>
+    /// <param name="predicate">Condition evaluated against the current Success value.</param>
+    /// <param name="message">Warning message to append when the predicate is true.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    let warnIf (predicate: 'TSuccess -> bool) (message: 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success (value, msgs) when predicate value -> Success (value, msgs @ [message])
+        | _ -> returns
 
     // -------------------------------------------------------------------------------------- //
 
@@ -408,14 +420,32 @@ module Returns =
     /// </summary>
     /// <param name="conversionFunction">The conversion function (common for both the Warning and Error Message).</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let mapMessages (conversionFunction: 'TMessage1 -> 'TMessage2) (returns : Returns<'TSuccess,'TMessage1>) = 
-        match returns with 
-        | Success (x,msgs) -> 
+    let mapMessages (conversionFunction: 'TMessage1 -> 'TMessage2) (returns : Returns<'TSuccess,'TMessage1>) =
+        match returns with
+        | Success (x,msgs) ->
             let msgs' = List.map conversionFunction msgs
             Success (x, msgs')
-        | Failure errors -> 
+        | Failure errors ->
             let errors' = List.map conversionFunction errors
             Failure errors'
+
+    /// <summary>
+    /// Transforms only the warning messages on a Success using the given function.
+    /// The Success value and any Failure error messages are propagated unchanged.
+    /// </summary>
+    let mapWarnings (f: 'TMessage -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success (value, msgs) -> Success (value, msgs |> List.map f)
+        | Failure _             -> returns
+
+    /// <summary>
+    /// Transforms only the error messages on a Failure using the given function.
+    /// The Failure errors are remapped; Success values and warnings are propagated unchanged.
+    /// </summary>
+    let mapErrors (f: 'TMessage -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success _        -> returns
+        | Failure errors   -> Failure (errors |> List.map f)
 
     // -------------------------------------------------------------------------------------- //
 
@@ -747,6 +777,26 @@ module Returns =
 
     // -------------------------------------------------------------------------------------- //
 
+    // ********************
+    // ** VALIDATE ALL  ***
+    // ********************
+
+    /// <summary>
+    /// Runs every validator in the list against the same input value and collects ALL errors and warnings.
+    /// Each validator must return a <c>Returns&lt;unit,'TMessage&gt;</c> — unit on success, messages on warning/failure.
+    /// If every validator succeeds, returns a Success of the original value with all warnings merged.
+    /// If any validator fails, returns a Failure with every accumulated error (no short-circuiting).
+    /// </summary>
+    let validateAll (validators: ('TSuccess -> Returns<unit,'TMessage>) list) (value: 'TSuccess) : Returns<'TSuccess,'TMessage> =
+        let results = validators |> List.map (fun v -> v value)
+        let errors  = results |> List.collect (fun r -> match r with | Failure msgs       -> msgs | _ -> [])
+        let warns   = results |> List.collect (fun r -> match r with | Success (_, msgs)  -> msgs | _ -> [])
+        match errors with
+        | [] -> Success (value, warns)
+        | _  -> Failure errors
+
+    // -------------------------------------------------------------------------------------- //
+
     [<AutoOpen>]
     module Operators =
 
@@ -878,7 +928,16 @@ type ReturnsBuilder() =
     member __.Bind(m, f) = Returns.bind f m
 
     member __.BindReturn(x: Returns<'T, 'U>, f) = Returns.map f x
-        
+
+    /// Enables the <c>and!</c> syntax for parallel binding.
+    /// Both branches are evaluated independently; errors from both failures are accumulated.
+    member __.MergeSources(t1: Returns<'T1,'M>, t2: Returns<'T2,'M>) : Returns<'T1 * 'T2,'M> =
+        match t1, t2 with
+        | Success (v1, msgs1), Success (v2, msgs2) -> Success ((v1, v2), msgs1 @ msgs2)
+        | Failure errs1,       Failure errs2        -> Failure (errs1 @ errs2)
+        | Failure errs,        _                    -> Failure errs
+        | _,                   Failure errs         -> Failure errs
+
     member __.Return(x) = Returns.ok x
         
     member __.ReturnFrom(x) = x
