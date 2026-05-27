@@ -136,10 +136,10 @@ let returnsFailOnWarningsTests =
             Expect.equal (failureMessages r) ["w"] "should carry warning as error"
         }
 
-        test "failOnWarnings converts Success with no warnings to Failure with empty errors" {
+        test "failOnWarnings leaves clean Success (no warnings) unchanged" {
             let r = Returns.ok 1 |> Returns.failOnWarnings
-            Expect.isTrue (isFailure r) "should become Failure"
-            Expect.equal (failureMessages r) [] "should have empty error list"
+            Expect.isTrue (isSuccess r) "clean Success should pass through"
+            Expect.equal (successValue r) 1 "value unchanged"
         }
 
         test "failOnWarnings leaves Failure unchanged" {
@@ -150,7 +150,7 @@ let returnsFailOnWarningsTests =
     ]
 
 let returnsTryCatchTests =
-    testList "Returns - tryCatch / protect" [
+    testList "Returns - tryCatch" [
 
         test "tryCatch returns Success when function succeeds" {
             let r = Returns.tryCatch (fun x -> x + 1) 5
@@ -162,11 +162,6 @@ let returnsTryCatchTests =
         test "tryCatch returns Failure when function throws" {
             let r = Returns.tryCatch (fun _ -> failwith "boom") 0
             Expect.isTrue (isFailure r) "should be Failure"
-        }
-
-        test "protect is alias for tryCatch" {
-            let r = Returns.protect (fun x -> x * 2) 3
-            Expect.equal (successValue r) 6 "should return 6"
         }
     ]
 

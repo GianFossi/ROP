@@ -122,8 +122,8 @@ module Returns =
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     let failOnWarnings (returns : Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
       match returns with
-      | Success (_,msgs) -> Failure msgs
-      | _ -> returns 
+      | Success (_, msgs) when msgs <> [] -> Failure msgs
+      | _ -> returns
 
     // -------------------------------------------------------------------------------------- //
         
@@ -173,22 +173,11 @@ module Returns =
     /// </summary>
     /// <param name="givenFunction">The function to be applied to the input value (that may raise an exception!).</param>
     /// <param name="value">The input value.</param>
-    let tryCatch (givenFunction: 'TSuccess1 -> 'TSuccess2) (value:'TSuccess1) : Returns<'TSuccess2,exn> = 
+    let tryCatch (givenFunction: 'TSuccess1 -> 'TSuccess2) (value:'TSuccess1) : Returns<'TSuccess2,exn> =
         try
             Success (givenFunction value ,[] )
         with
-        | exn -> Failure [exn]
-    
-    /// <summary>
-    /// Creates a safe version of the supplied function, 
-    /// applying the given function to the specified input Value and 
-    /// catch its output as a<c>Returns</c> (result) container, 
-    /// instead of throwing any internally raised exception/s.
-    /// </summary>
-    /// <param name="givenFunction">The function to be applied to the input value (that may raise an exception!).</param>
-    /// <param name="value">The input value.</param>
-    let protect (givenFunction: 'TSuccess1 -> 'TSuccess2) (value:'TSuccess1) : Returns<'TSuccess2,exn> = 
-        tryCatch givenFunction value
+        | ex when not (ex :? OutOfMemoryException) -> Failure [ex]
 
     // -------------------------------------------------------------------------------------- //
 
@@ -469,10 +458,10 @@ module Returns =
     /// ( Synonym of "lift" <see cref="lift"/> ).
     /// 
     /// The function is applied to the first returns argument, then to the second returns argument, then to the third returns argument.
-    let inline map3 successFunction 
-                    (returns1 : Returns<'TSuccess1,'TMessage>) 
+    let inline map3 successFunction
+                    (returns1 : Returns<'TSuccess1,'TMessage>)
                     (returns2 : Returns<'TSuccess2,'TMessage>)
-                    (returns3 : Returns<'TSuccess2,'TMessage>) = 
+                    (returns3 : Returns<'TSuccess3,'TMessage>) =
         // successFunction <!> return1 <*> return2 <*> return3
         ok successFunction
         |> apply <| returns1
@@ -490,10 +479,10 @@ module Returns =
     /// ( Synonym of "lift" <see cref="lift"/> ).
     /// 
     /// The function is applied to the first returns argument, then to the second returns argument, then to the third returns argument, then to the fourth returns argument.
-    let inline map4 successFunction (returns1 : Returns<'TSuccess1,'TMessage>) 
+    let inline map4 successFunction (returns1 : Returns<'TSuccess1,'TMessage>)
                                     (returns2 : Returns<'TSuccess2,'TMessage>)
-                                    (returns3 : Returns<'TSuccess2,'TMessage>) 
-                                    (returns4 : Returns<'TSuccess2,'TMessage>) = 
+                                    (returns3 : Returns<'TSuccess3,'TMessage>)
+                                    (returns4 : Returns<'TSuccess4,'TMessage>) =
         // successFunction <!> return1 <*> return2 <*> return3
         ok successFunction
         |> apply <| returns1
@@ -737,16 +726,31 @@ module Returns =
 
     // -------------------------------------------------------------------------------------- //
 
-    let private tupleToList t = 
-        if Microsoft.FSharp.Reflection.FSharpType.IsTuple(t.GetType()) 
-            then Some (Microsoft.FSharp.Reflection.FSharpValue.GetTupleFields t |> Array.toList)
-            else None
-    
-    let private listToTuple l =
-        let l' = List.toArray l
-        let types = l' |> Array.map (fun o -> o.GetType())
-        let tupleType = Microsoft.FSharp.Reflection.FSharpType.MakeTupleType types
-        Microsoft.FSharp.Reflection.FSharpValue.MakeTuple (l' , tupleType)
+    // -------------------------------------------------------------------------------------- //
+
+    // ********************
+    // **   TRAVERSE    ***
+    // ********************
+
+    /// <summary>
+    /// Maps each element of a list through a switch function and collects results into a single Returns.
+    /// All errors are accumulated: if any element fails, failures from every failing element are merged.
+    /// </summary>
+    let traverseList (switchFunction: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>) (inputs: 'TSuccess1 list) : Returns<'TSuccess2 list,'TMessage> =
+        let folder state current =
+            match state, switchFunction current with
+            | Success (acc, msgs1), Success (v, msgs2) -> Success (acc @ [v], msgs1 @ msgs2)
+            | Failure errs, Success _                  -> Failure errs
+            | Success _, Failure errs                  -> Failure errs
+            | Failure errs1, Failure errs2             -> Failure (errs1 @ errs2)
+        List.fold folder (ok []) inputs
+
+    /// <summary>
+    /// Converts a list of Returns into a Returns of a list, accumulating all errors if any element is a Failure.
+    /// Equivalent to traverseList id.
+    /// </summary>
+    let sequenceList (returns: Returns<'TSuccess,'TMessage> list) : Returns<'TSuccess list,'TMessage> =
+        traverseList id returns
 
     // -------------------------------------------------------------------------------------- //
 

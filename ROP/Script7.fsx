@@ -28,16 +28,16 @@ let builder ( insideDiameter: double, outsideDiameter: double, length: double ) 
     result {
         
         let! l = length 
-                |> ROP.Result.Check.double.islessThenOrEqualTo 0.0 ( IsNegative ("length", length) )
+                |> ROP.Result.Check.double.isLessThanOrEqualTo 0.0 ( IsNegative ("length", length) )
 
         let! id = insideDiameter 
-                |> ROP.Result.Check.double.islessThenOrEqualTo 0.0 ( IsNegative ("insideDiameter", insideDiameter) )
+                |> ROP.Result.Check.double.isLessThanOrEqualTo 0.0 ( IsNegative ("insideDiameter", insideDiameter) )
 
         let! od = outsideDiameter 
-                |> ROP.Result.Check.double.islessThenOrEqualTo 0.0 ( IsNegative ("outsideDiameter", insideDiameter) )
+                |> ROP.Result.Check.double.isLessThanOrEqualTo 0.0 ( IsNegative ("outsideDiameter", insideDiameter) )
 
         let isIDlessThanOD = 
-                outsideDiameter |> ROP.Result.Check.double.islessThenOrEqualTo id ( IsNegative ("outsideDiameter", insideDiameter) )
+                outsideDiameter |> ROP.Result.Check.double.isLessThanOrEqualTo id ( IsNegative ("outsideDiameter", insideDiameter) )
         
         let cyl = new Cylinder(id, od, l )
         
