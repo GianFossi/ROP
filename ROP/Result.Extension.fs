@@ -338,17 +338,30 @@ module Result =
 
     /// <summary>
     /// </summary>
-    let inline fold (folder: 'State->'T->'State) (state: Result<'State,'Error>) (sources: Result<'T,'Error> seq) = 
+    let inline fold (folder: 'State->'T->'State) (state: Result<'State,'Error>) (sources: Result<'T,'Error> seq) =
         use e = sources.GetEnumerator()
         let mutable state = state
         while e.MoveNext() do
             let addSuccess stateOk currentOk = folder stateOk currentOk
-            let addFailure stateError currentError = stateError
+            let addFailure stateError _currentError = stateError
             state <- merge addSuccess addFailure state e.Current
         state
-    
+
+    /// <summary>
+    /// Variant of fold for Result with list-typed errors that accumulates all errors across failures,
+    /// rather than keeping only the first error encountered.
+    /// </summary>
+    let inline foldList (folder: 'State->'T->'State) (state: Result<'State,'Error list>) (sources: Result<'T,'Error list> seq) =
+        use e = sources.GetEnumerator()
+        let mutable state = state
+        while e.MoveNext() do
+            let addSuccess stateOk currentOk = folder stateOk currentOk
+            let addFailure stateErrors currentErrors = stateErrors @ currentErrors
+            state <- merge addSuccess addFailure state e.Current
+        state
+
     // -------------------------------------------------------------------------------------- //
-    
+
     // ********************
     // **      TEE      ***
     // ********************
@@ -390,11 +403,11 @@ module Result =
     
     /// <summary>
     /// </summary>
-    let log (record:bool) (message:string) (source: Result<'T,'Error>) = 
-        let fOk s = printfn ">>> %s: Result is Ok: %A " message s 
-        let fError err = printfn ">>> %s: Result is a Error: %A" message err
+    let log (logger: string -> unit) (record:bool) (message:string) (source: Result<'T,'Error>) =
+        let fOk s = logger (sprintf ">>> %s: Result is Ok: %A" message s)
+        let fError err = logger (sprintf ">>> %s: Result is a Error: %A" message err)
         if record then
-            eitherTee fOk fError source 
+            eitherTee fOk fError source
         else
             source
 

@@ -260,9 +260,9 @@ module Returns =
     /// Converts a Choice into a r<c>Returns</c> (result) container.
     /// </summary>
     /// <param name="choice">The input choice type.</param>
-    let ofChoice (choice : Choice<'TSuccess,'TMessage list>) =
+    let ofChoice (choice : Choice<'TSuccess * 'TMessage list, 'TMessage list>) =
         match choice with
-        | Choice1Of2 value -> ok value
+        | Choice1Of2 (value, warns) -> Success (value, warns)
         | Choice2Of2 errors -> failmany errors
 
     // -------------------------------------------------------------------------------------- //
@@ -279,9 +279,9 @@ module Returns =
     /// <summary>
     /// Converts a Result into a <c>Returns</c> (result) container.
     /// </summary>
-    let ofResult ( result: Result<'TSuccess,'TMessage list>) =
+    let ofResult (result: Result<'TSuccess * 'TMessage list, 'TMessage list>) =
         match result with
-        | Result.Ok value -> ok value
+        | Result.Ok (value, warns) -> Success (value, warns)
         | Result.Error errors -> failmany errors
 
     // -------------------------------------------------------------------------------------- //
@@ -627,11 +627,11 @@ module Returns =
     /// <param name="record">Boolean value to indicate ioif teh Log action need to be performed (TRUE) or skipped (FALSE).</param>
     /// <param name="message">A description message.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let log (record:bool) (message:string) (returns : Returns<'TSuccess,'TMessage>) = 
-        let successFunction (s, msgs) = printfn ">>> %s: Returns is a Success: %A (%A)" message s msgs
-        let failureFunction errs = printfn ">>> %s Returns is a Failure: %A" message errs
+    let log (logger: string -> unit) (record:bool) (message:string) (returns : Returns<'TSuccess,'TMessage>) =
+        let successFunction (s, msgs) = logger (sprintf ">>> %s: Returns is a Success: %A (%A)" message s msgs)
+        let failureFunction errs = logger (sprintf ">>> %s Returns is a Failure: %A" message errs)
         if record then
-            eitherTee successFunction failureFunction returns 
+            eitherTee successFunction failureFunction returns
         else
             returns
 
@@ -739,11 +739,11 @@ module Returns =
     let traverseList (switchFunction: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>) (inputs: 'TSuccess1 list) : Returns<'TSuccess2 list,'TMessage> =
         let folder state current =
             match state, switchFunction current with
-            | Success (acc, msgs1), Success (v, msgs2) -> Success (acc @ [v], msgs1 @ msgs2)
+            | Success (acc, msgs1), Success (v, msgs2) -> Success (v :: acc, msgs1 @ msgs2)
             | Failure errs, Success _                  -> Failure errs
             | Success _, Failure errs                  -> Failure errs
             | Failure errs1, Failure errs2             -> Failure (errs1 @ errs2)
-        List.fold folder (ok []) inputs
+        List.fold folder (ok []) inputs |> map List.rev
 
     /// <summary>
     /// Converts a list of Returns into a Returns of a list, accumulating all errors if any element is a Failure.

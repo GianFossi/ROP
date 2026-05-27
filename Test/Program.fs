@@ -204,8 +204,17 @@ let returnsConversionTests =
             | _ -> failtest "Expected Choice2Of2"
         }
 
-        test "ofChoice wraps Choice1Of2 into Success" {
-            let r = Returns.ofChoice (Choice1Of2 10)
+        test "ofChoice wraps Choice1Of2 into Success, restoring warnings" {
+            let r = Returns.ofChoice (Choice1Of2 (10, ["w"]))
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 10 "should be Success with 10"
+                Expect.equal msgs ["w"] "warnings restored"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "ofChoice wraps Choice1Of2 with no warnings into clean Success" {
+            let r = Returns.ofChoice (Choice1Of2 (10, []))
             Expect.equal (successValue r) 10 "should be Success with 10"
         }
 
@@ -230,8 +239,17 @@ let returnsConversionTests =
             | _ -> failtest "Expected Error"
         }
 
-        test "ofResult wraps Ok into Success" {
-            let r = Returns.ofResult (Result.Ok 5)
+        test "ofResult wraps Ok into Success, restoring warnings" {
+            let r = Returns.ofResult (Result.Ok (5, ["w"]))
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 5 "should be Success with 5"
+                Expect.equal msgs ["w"] "warnings restored"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "ofResult wraps Ok with no warnings into clean Success" {
+            let r = Returns.ofResult (Result.Ok (5, []))
             Expect.equal (successValue r) 5 "should be Success"
         }
 
