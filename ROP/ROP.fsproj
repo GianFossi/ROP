@@ -28,5 +28,6 @@
     <None Include="Script5.fsx" />
     <None Include="Script6.fsx" />
     <None Include="Script7.fsx" />
+    <None Include="Examples.Returns.HeatExchanger.fsx" />
   </ItemGroup>
 </Project>

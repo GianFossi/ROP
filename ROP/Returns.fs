@@ -48,18 +48,11 @@ type Returns<'TSuccess, 'TMessage> =
     /// Convert this <c>Returns</c> (result) container into a string.
     /// </summary>
     override this.ToString() =
-        
-        // Print all Messages.
-        let rec print acc (msgs: _ list) =
-            match msgs with
-            | [] -> acc
-            | x::xs when xs.Length = 0 -> print (acc + x.ToString()) xs
-            | x::xs -> print (acc + x.ToString() + "; ") xs 
-
-        // Define what to Print.
+        let printMsgs msgs =
+            msgs |> List.map (fun x -> x.ToString()) |> String.concat "; "
         match this with
-        | Success(value,msgs) -> sprintf "Success: %A - %s" value ( print String.Empty msgs )
-        | Failure(msgs) -> sprintf "Failure: %s" ( print String.Empty msgs )    
+        | Success(value, msgs) -> sprintf "Success: %A - %s" value (printMsgs msgs)
+        | Failure(msgs)        -> sprintf "Failure: %s" (printMsgs msgs)
 
 // ****************************************************************************************************** //
 // ****************************************************************************************************** //
@@ -94,8 +87,20 @@ module Returns =
     /// </summary>
     /// <param name="msgs">The list of Warning Message associated to the Success value.</param>
     /// <param name="x">The Success value.</param>
-    let warnmany<'TSuccess,'TMessage> (msgs:'TMessage seq) (x:'TSuccess) : Returns<'TSuccess,'TMessage> = 
+    let warnmany<'TSuccess,'TMessage> (msgs:'TMessage seq) (x:'TSuccess) : Returns<'TSuccess,'TMessage> =
         Success(x,msgs |> Seq.toList )
+
+    /// <summary>
+    /// Appends a single warning to the current Success value if the predicate holds; passes through unchanged otherwise.
+    /// Failures are always propagated unchanged.
+    /// </summary>
+    /// <param name="predicate">Condition evaluated against the current Success value.</param>
+    /// <param name="message">Warning message to append when the predicate is true.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    let warnIf (predicate: 'TSuccess -> bool) (message: 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success (value, msgs) when predicate value -> Success (value, msgs @ [message])
+        | _ -> returns
 
     // -------------------------------------------------------------------------------------- //
 
@@ -122,8 +127,8 @@ module Returns =
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     let failOnWarnings (returns : Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
       match returns with
-      | Success (_,msgs) -> Failure msgs
-      | _ -> returns 
+      | Success (_, msgs) when msgs <> [] -> Failure msgs
+      | _ -> returns
 
     // -------------------------------------------------------------------------------------- //
         
@@ -173,22 +178,11 @@ module Returns =
     /// </summary>
     /// <param name="givenFunction">The function to be applied to the input value (that may raise an exception!).</param>
     /// <param name="value">The input value.</param>
-    let tryCatch (givenFunction: 'TSuccess1 -> 'TSuccess2) (value:'TSuccess1) : Returns<'TSuccess2,exn> = 
+    let tryCatch (givenFunction: 'TSuccess1 -> 'TSuccess2) (value:'TSuccess1) : Returns<'TSuccess2,exn> =
         try
             Success (givenFunction value ,[] )
         with
-        | exn -> Failure [exn]
-    
-    /// <summary>
-    /// Creates a safe version of the supplied function, 
-    /// applying the given function to the specified input Value and 
-    /// catch its output as a<c>Returns</c> (result) container, 
-    /// instead of throwing any internally raised exception/s.
-    /// </summary>
-    /// <param name="givenFunction">The function to be applied to the input value (that may raise an exception!).</param>
-    /// <param name="value">The input value.</param>
-    let protect (givenFunction: 'TSuccess1 -> 'TSuccess2) (value:'TSuccess1) : Returns<'TSuccess2,exn> = 
-        tryCatch givenFunction value
+        | ex when not (ex :? OutOfMemoryException) -> Failure [ex]
 
     // -------------------------------------------------------------------------------------- //
 
@@ -271,9 +265,9 @@ module Returns =
     /// Converts a Choice into a r<c>Returns</c> (result) container.
     /// </summary>
     /// <param name="choice">The input choice type.</param>
-    let ofChoice (choice : Choice<'TSuccess,'TMessage list>) =
+    let ofChoice (choice : Choice<'TSuccess * 'TMessage list, 'TMessage list>) =
         match choice with
-        | Choice1Of2 value -> ok value
+        | Choice1Of2 (value, warns) -> Success (value, warns)
         | Choice2Of2 errors -> failmany errors
 
     // -------------------------------------------------------------------------------------- //
@@ -290,9 +284,9 @@ module Returns =
     /// <summary>
     /// Converts a Result into a <c>Returns</c> (result) container.
     /// </summary>
-    let ofResult ( result: Result<'TSuccess,'TMessage list>) =
+    let ofResult (result: Result<'TSuccess * 'TMessage list, 'TMessage list>) =
         match result with
-        | Result.Ok value -> ok value
+        | Result.Ok (value, warns) -> Success (value, warns)
         | Result.Error errors -> failmany errors
 
     // -------------------------------------------------------------------------------------- //
@@ -426,14 +420,32 @@ module Returns =
     /// </summary>
     /// <param name="conversionFunction">The conversion function (common for both the Warning and Error Message).</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let mapMessages (conversionFunction: 'TMessage1 -> 'TMessage2) (returns : Returns<'TSuccess,'TMessage1>) = 
-        match returns with 
-        | Success (x,msgs) -> 
+    let mapMessages (conversionFunction: 'TMessage1 -> 'TMessage2) (returns : Returns<'TSuccess,'TMessage1>) =
+        match returns with
+        | Success (x,msgs) ->
             let msgs' = List.map conversionFunction msgs
             Success (x, msgs')
-        | Failure errors -> 
+        | Failure errors ->
             let errors' = List.map conversionFunction errors
             Failure errors'
+
+    /// <summary>
+    /// Transforms only the warning messages on a Success using the given function.
+    /// The Success value and any Failure error messages are propagated unchanged.
+    /// </summary>
+    let mapWarnings (f: 'TMessage -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success (value, msgs) -> Success (value, msgs |> List.map f)
+        | Failure _             -> returns
+
+    /// <summary>
+    /// Transforms only the error messages on a Failure using the given function.
+    /// The Failure errors are remapped; Success values and warnings are propagated unchanged.
+    /// </summary>
+    let mapErrors (f: 'TMessage -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success _        -> returns
+        | Failure errors   -> Failure (errors |> List.map f)
 
     // -------------------------------------------------------------------------------------- //
 
@@ -469,10 +481,10 @@ module Returns =
     /// ( Synonym of "lift" <see cref="lift"/> ).
     /// 
     /// The function is applied to the first returns argument, then to the second returns argument, then to the third returns argument.
-    let inline map3 successFunction 
-                    (returns1 : Returns<'TSuccess1,'TMessage>) 
+    let inline map3 successFunction
+                    (returns1 : Returns<'TSuccess1,'TMessage>)
                     (returns2 : Returns<'TSuccess2,'TMessage>)
-                    (returns3 : Returns<'TSuccess2,'TMessage>) = 
+                    (returns3 : Returns<'TSuccess3,'TMessage>) =
         // successFunction <!> return1 <*> return2 <*> return3
         ok successFunction
         |> apply <| returns1
@@ -490,10 +502,10 @@ module Returns =
     /// ( Synonym of "lift" <see cref="lift"/> ).
     /// 
     /// The function is applied to the first returns argument, then to the second returns argument, then to the third returns argument, then to the fourth returns argument.
-    let inline map4 successFunction (returns1 : Returns<'TSuccess1,'TMessage>) 
+    let inline map4 successFunction (returns1 : Returns<'TSuccess1,'TMessage>)
                                     (returns2 : Returns<'TSuccess2,'TMessage>)
-                                    (returns3 : Returns<'TSuccess2,'TMessage>) 
-                                    (returns4 : Returns<'TSuccess2,'TMessage>) = 
+                                    (returns3 : Returns<'TSuccess3,'TMessage>)
+                                    (returns4 : Returns<'TSuccess4,'TMessage>) =
         // successFunction <!> return1 <*> return2 <*> return3
         ok successFunction
         |> apply <| returns1
@@ -638,11 +650,11 @@ module Returns =
     /// <param name="record">Boolean value to indicate ioif teh Log action need to be performed (TRUE) or skipped (FALSE).</param>
     /// <param name="message">A description message.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let log (record:bool) (message:string) (returns : Returns<'TSuccess,'TMessage>) = 
-        let successFunction (s, msgs) = printfn ">>> %s: Returns is a Success: %A (%A)" message s msgs
-        let failureFunction errs = printfn ">>> %s Returns is a Failure: %A" message errs
+    let log (logger: string -> unit) (record:bool) (message:string) (returns : Returns<'TSuccess,'TMessage>) =
+        let successFunction (s, msgs) = logger (sprintf ">>> %s: Returns is a Success: %A (%A)" message s msgs)
+        let failureFunction errs = logger (sprintf ">>> %s Returns is a Failure: %A" message errs)
         if record then
-            eitherTee successFunction failureFunction returns 
+            eitherTee successFunction failureFunction returns
         else
             returns
 
@@ -737,16 +749,55 @@ module Returns =
 
     // -------------------------------------------------------------------------------------- //
 
-    let private tupleToList t = 
-        if Microsoft.FSharp.Reflection.FSharpType.IsTuple(t.GetType()) 
-            then Some (Microsoft.FSharp.Reflection.FSharpValue.GetTupleFields t |> Array.toList)
-            else None
-    
-    let private listToTuple l =
-        let l' = List.toArray l
-        let types = l' |> Array.map (fun o -> o.GetType())
-        let tupleType = Microsoft.FSharp.Reflection.FSharpType.MakeTupleType types
-        Microsoft.FSharp.Reflection.FSharpValue.MakeTuple (l' , tupleType)
+    // -------------------------------------------------------------------------------------- //
+
+    // ********************
+    // **   TRAVERSE    ***
+    // ********************
+
+    /// <summary>
+    /// Maps each element of a list through a switch function and collects results into a single Returns.
+    /// All errors are accumulated: if any element fails, failures from every failing element are merged.
+    /// </summary>
+    let traverseList (switchFunction: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>) (inputs: 'TSuccess1 list) : Returns<'TSuccess2 list,'TMessage> =
+        // Accumulate warnings/errors in reverse to avoid repeated O(n) appends, then reverse once at the end.
+        let folder state current =
+            match state, switchFunction current with
+            | Success (acc, msgsRev), Success (v, msgs) -> Success (v :: acc, List.revAppend msgs msgsRev)
+            | Failure errsRev,        Success _         -> Failure errsRev
+            | Success _,              Failure errs      -> Failure (List.rev errs)
+            | Failure errsRev,        Failure errs      -> Failure (List.revAppend errs errsRev)
+
+        match List.fold folder (Success ([], [])) inputs with
+        | Success (acc, msgsRev) -> Success (List.rev acc, List.rev msgsRev)
+        | Failure errsRev        -> Failure (List.rev errsRev)
+
+    /// <summary>
+    /// Converts a list of Returns into a Returns of a list, accumulating all errors if any element is a Failure.
+    /// Equivalent to traverseList id.
+    /// </summary>
+    let sequenceList (returns: Returns<'TSuccess,'TMessage> list) : Returns<'TSuccess list,'TMessage> =
+        traverseList id returns
+
+    // -------------------------------------------------------------------------------------- //
+
+    // ********************
+    // ** VALIDATE ALL  ***
+    // ********************
+
+    /// <summary>
+    /// Runs every validator in the list against the same input value and collects ALL errors and warnings.
+    /// Each validator must return a <c>Returns&lt;unit,'TMessage&gt;</c> — unit on success, messages on warning/failure.
+    /// If every validator succeeds, returns a Success of the original value with all warnings merged.
+    /// If any validator fails, returns a Failure with every accumulated error (no short-circuiting).
+    /// </summary>
+    let validateAll (validators: ('TSuccess -> Returns<unit,'TMessage>) list) (value: 'TSuccess) : Returns<'TSuccess,'TMessage> =
+        let results = validators |> List.map (fun v -> v value)
+        let errors  = results |> List.collect (fun r -> match r with | Failure msgs       -> msgs | _ -> [])
+        let warns   = results |> List.collect (fun r -> match r with | Success (_, msgs)  -> msgs | _ -> [])
+        match errors with
+        | [] -> Success (value, warns)
+        | _  -> Failure errors
 
     // -------------------------------------------------------------------------------------- //
 
@@ -881,7 +932,16 @@ type ReturnsBuilder() =
     member __.Bind(m, f) = Returns.bind f m
 
     member __.BindReturn(x: Returns<'T, 'U>, f) = Returns.map f x
-        
+
+    /// Enables the <c>and!</c> syntax for parallel binding.
+    /// Both branches are evaluated independently; errors from both failures are accumulated.
+    member __.MergeSources(t1: Returns<'T1,'M>, t2: Returns<'T2,'M>) : Returns<'T1 * 'T2,'M> =
+        match t1, t2 with
+        | Success (v1, msgs1), Success (v2, msgs2) -> Success ((v1, v2), msgs1 @ msgs2)
+        | Failure errs1,       Failure errs2        -> Failure (errs1 @ errs2)
+        | Failure errs,        _                    -> Failure errs
+        | _,                   Failure errs         -> Failure errs
+
     member __.Return(x) = Returns.ok x
         
     member __.ReturnFrom(x) = x
