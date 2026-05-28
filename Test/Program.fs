@@ -1077,6 +1077,22 @@ let resultExtensionTests =
             | Result.Fail e -> Expect.equal e "e" "Fail matches Error"
             | _ -> failtest "Expected Fail"
         }
+
+        test "foldList accumulates all Ok values" {
+            let items = [Result.Ok 1; Result.Ok 2; Result.Ok 3]
+            let r = Result.foldList (+) (Result.Ok 0) items
+            match r with
+            | Result.Ok v -> Expect.equal v 6 "should sum to 6"
+            | _ -> failtest "Expected Ok"
+        }
+
+        test "foldList accumulates errors from multiple failures" {
+            let items : Result<int, string list> list = [Result.Ok 1; Result.Error ["e1"]; Result.Error ["e2"; "e3"]]
+            let r = Result.foldList (+) (Result.Ok 0) items
+            match r with
+            | Result.Error errs -> Expect.equal errs ["e1"; "e2"; "e3"] "all errors should be accumulated"
+            | _ -> failtest "Expected Error"
+        }
     ]
 
 // ============================================================
