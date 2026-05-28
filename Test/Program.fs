@@ -989,6 +989,16 @@ let resultExtensionTests =
             Expect.isFalse (Result.isError (Result.Ok 1)) "should be false"
         }
 
+        test "toOption converts Ok to Some" {
+            let r = Result.toOption (Result.Ok 5)
+            Expect.equal r (Some 5) "should be Some 5"
+        }
+
+        test "toOption converts Error to None" {
+            let r = Result.toOption (Result.Error "e")
+            Expect.equal r None "should be None"
+        }
+
         test "toChoice converts Ok to Choice1Of2" {
             match Result.toChoice (Result.Ok 5) with
             | Choice1Of2 v -> Expect.equal v 5 "should be 5"
