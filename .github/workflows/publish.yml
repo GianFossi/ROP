@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -56,3 +56,18 @@ jobs:
           --api-key ${{ secrets.NUGET_API_KEY }}
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
+
+      - name: Zip DLL output
+        run: >
+          zip -j nupkgs/ROP-${{ steps.version.outputs.VERSION }}-dll.zip
+          ROP/bin/Release/net8.0/ROP.dll
+          ROP/bin/Release/net8.0/ROP.xml
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.version.outputs.VERSION }}
+          generate_release_notes: true
+          files: |
+            nupkgs/*.nupkg
+            nupkgs/*-dll.zip
