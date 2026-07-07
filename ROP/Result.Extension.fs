@@ -15,6 +15,8 @@
 /// </summary> 
 namespace ROP
 
+open System
+
 /// Additional operations on Result<'T,'Error> (from FSharpPlus: https://github.com/fsprojects/FSharpPlus/blob/master/src/FSharpPlus/Extensions/Result.fs)
 module Result =
     

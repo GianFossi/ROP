@@ -4,8 +4,13 @@
     <TargetFramework>net8.0</TargetFramework>
     <Authors>Gian-Luca ANFOSSI</Authors>
     <Company>Ganfoss</Company>
-    <PackageIcon>ROP.ico</PackageIcon> 
-
+    <PackageId>Ganfoss.ROP</PackageId>
+    <Description>An F# library implementing Railway-Oriented Programming around a custom Returns type that tracks warnings alongside success values.</Description>
+    <PackageTags>fsharp;railway-oriented-programming;functional;validation;result</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/GianFossi/ROP</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
