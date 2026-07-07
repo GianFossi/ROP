@@ -760,17 +760,18 @@ module Returns =
     /// All errors are accumulated: if any element fails, failures from every failing element are merged.
     /// </summary>
     let traverseList (switchFunction: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>) (inputs: 'TSuccess1 list) : Returns<'TSuccess2 list,'TMessage> =
-        // Accumulate warnings/errors in reverse to avoid repeated O(n) appends, then reverse once at the end.
+        // Accumulate warnings/errors in reverse to avoid repeated O(n) appends, then reverse once at the end.
+        let revAppend xs ys = List.fold (fun acc x -> x :: acc) ys xs
         let folder state current =
             match state, switchFunction current with
-            | Success (acc, msgsRev), Success (v, msgs) -> Success (v :: acc, List.revAppend msgs msgsRev)
-            | Failure errsRev,        Success _         -> Failure errsRev
-            | Success _,              Failure errs      -> Failure (List.rev errs)
-            | Failure errsRev,        Failure errs      -> Failure (List.revAppend errs errsRev)
-
-        match List.fold folder (Success ([], [])) inputs with
-        | Success (acc, msgsRev) -> Success (List.rev acc, List.rev msgsRev)
-        | Failure errsRev        -> Failure (List.rev errsRev)
+            | Success (acc, msgsRev), Success (v, msgs) -> Success (v :: acc, revAppend msgs msgsRev)
+            | Failure errsRev,        Success _         -> Failure errsRev
+            | Success _,              Failure errs      -> Failure (List.rev errs)
+            | Failure errsRev,        Failure errs      -> Failure (revAppend errs errsRev)
+
+        match List.fold folder (Success ([], [])) inputs with
+        | Success (acc, msgsRev) -> Success (List.rev acc, List.rev msgsRev)
+        | Failure errsRev        -> Failure (List.rev errsRev)
 
     /// <summary>
     /// Converts a list of Returns into a Returns of a list, accumulating all errors if any element is a Failure.
