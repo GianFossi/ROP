@@ -25,6 +25,10 @@
 
 open System
 open ROP
+// Custom operators (>>=, >=>, <!>, <*>, ...) live in a nested [<AutoOpen>] module that only
+// auto-opens once its immediately-enclosing module is opened; `open ROP` alone does not
+// reach it because `Returns` itself is [<RequireQualifiedAccess>].
+open Returns.Operators
 open ROP.Validation
 
 // ====================================================================================================== //

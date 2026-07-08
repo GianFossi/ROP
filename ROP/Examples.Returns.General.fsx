@@ -6,6 +6,11 @@
 
 open System
 open ROP
+// Custom operators (>>=, >=>, <=<, <!>, <*>, &&&) live in a nested [<AutoOpen>] module,
+// which only auto-opens once its immediately-enclosing module is opened. `Returns` itself
+// is [<RequireQualifiedAccess>] (so `open ROP` alone does not cascade into it) - hence this
+// explicit open is required for the operators used below to resolve.
+open Returns.Operators
 
 // ------------------------------------------------------------------------------------------------------ //
 
@@ -32,7 +37,6 @@ Returns.failmany<int,string> errs // Failure ["Error1!"; "Error2!"; "Error3!"]
 let func x = x * 2.0
 
 Returns.ok<double,string> 5.0 |> Returns.map func // Success (10.0, [])
-Returns.ok<double,string> 5.0 |> Returns.lift func // Success (10.0, [])
 
 Returns.fail<double,string> "Error!" |> Returns.map func // Failure ["Error!"]
 
