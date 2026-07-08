@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Test",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "Debug",
+            "program": "${workspaceFolder}/Test/bin/Debug/net8.0/Test.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/Test",
+            "console": "integratedTerminal",
+            "stopAtEntry": false
+        }
+    ]
+}

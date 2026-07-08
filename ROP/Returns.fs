@@ -1,4 +1,4 @@
-﻿// ****************************************************************************************************** //
+// ****************************************************************************************************** //
 // ****************************************************************************************************** //
 // Author: G.L. Anfossi (ALO/UTEC).
 //
@@ -10,7 +10,7 @@
 // ****************************************************************************************************** //
 // ****************************************************************************************************** //
 
-/// <summary> 
+/// <summary>
 /// Contains error propagation functions and a computation expression builder for Railway-Oriented-Programming (ROP).
 /// </summary>
 namespace ROP
@@ -25,32 +25,44 @@ open System
 // ****************************************************************************************************** //
 
 /// <summary>
-/// <para>A <c>Returns</c> is a container (similar to 'Result' container) with a status that may be:</para> 
-/// <para> * a 'Success' containing a VALID VALUE of type 'TSuccess along with a list of WARNING MESSAGEs of type 'TMessage.</para>  
-/// <para> * a 'Failure' containing a list of ERROR MESSAGEs of type 'TMessage.</para> 
+/// <para>A <c>Returns</c> is a container (similar to 'Result' container) with a status that may be:</para>
+/// <para> * a 'Success' containing a VALID VALUE of type 'TSuccess along with a list of WARNING MESSAGEs of type 'TMessage.</para>
+/// <para> * a 'Failure' containing a list of ERROR MESSAGEs of type 'TMessage.</para>
 /// <para>The <c>Returns</c> (result) container returns only the first error.</para>
 /// </summary>
-type Returns<'TSuccess, 'TMessage> = 
+/// <typeparam name="TSuccess">The type of the value carried by the Success case.</typeparam>
+/// <typeparam name="TMessage">The type shared by both warning messages (Success) and error messages (Failure).</typeparam>
+type Returns<'TSuccess, 'TMessage> =
 
     /// <summary>
     /// Represents the <c>Returns</c> (result) container in a successful status/computation.
+    /// Carries the computed value together with any non-fatal warning messages accumulated along the way.
     /// </summary>
     | Success of 'TSuccess * 'TMessage list
-    
+
     /// <summary>
     /// Represents the <c>Returns</c> (result) container in a failed status/computation.
+    /// Carries every accumulated error message (there is always at least one).
     /// </summary>
     | Failure of 'TMessage list
-    
+
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
-    /// Convert this <c>Returns</c> (result) container into a string.
+    /// Convert this <c>Returns</c> (result) container into a human-readable string, primarily intended for
+    /// debugging/logging output.
     /// </summary>
+    /// <returns>
+    /// "Success: &lt;value&gt; - &lt;warnings&gt;" for a Success, or "Failure: &lt;errors&gt;" for a Failure.
+    /// </returns>
     override this.ToString() =
+        // Renders a message list as a single "; "-separated string, calling each message's own ToString().
         let printMsgs msgs =
             msgs |> List.map (fun x -> x.ToString()) |> String.concat "; "
         match this with
+        // %A performs structural (reflection-based) formatting of the value, which is more informative than
+        // %O for arbitrary record/tuple/list success values (at the cost of some reflection overhead) -
+        // acceptable here since ToString() is a diagnostics/logging path, not a hot path.
         | Success(value, msgs) -> sprintf "Success: %A - %s" value (printMsgs msgs)
         | Failure(msgs)        -> sprintf "Failure: %s" (printMsgs msgs)
 
@@ -61,7 +73,7 @@ type Returns<'TSuccess, 'TMessage> =
 /// Basic operations on <c>Returns</c> (result).
 /// </summary>
 [<RequireQualifiedAccess>]
-module Returns =  
+module Returns =
 
     // -------------------------------------------------------------------------------------- //
 
@@ -69,17 +81,19 @@ module Returns =
     /// Wraps a value in a Success of a <c>Returns</c> (result) type (without any warning messages).
     /// </summary>
     /// <param name="x">The input value.</param>
-    let ok<'TSuccess,'TMessage> (x:'TSuccess) : Returns<'TSuccess,'TMessage> = 
+    /// <returns>A Success carrying <paramref name="x"/> and an empty warning list.</returns>
+    let ok<'TSuccess,'TMessage> (x:'TSuccess) : Returns<'TSuccess,'TMessage> =
         Success(x, [])
 
     // -------------------------------------------------------------------------------------- //
-    
+
     /// <summary>
     /// Wraps a value in a Success of a <c>Returns</c> (result) type and adds a single warning message.
     /// </summary>
     /// <param name="msg">The Warning Message associated to the Success value.</param>
     /// <param name="x">The Success value.</param>
-    let warn<'TSuccess,'TMessage> (msg:'TMessage) (x:'TSuccess) : Returns<'TSuccess,'TMessage> = 
+    /// <returns>A Success carrying <paramref name="x"/> and a single-element warning list containing <paramref name="msg"/>.</returns>
+    let warn<'TSuccess,'TMessage> (msg:'TMessage) (x:'TSuccess) : Returns<'TSuccess,'TMessage> =
         Success(x,[msg])
 
     /// <summary>
@@ -87,7 +101,10 @@ module Returns =
     /// </summary>
     /// <param name="msgs">The list of Warning Message associated to the Success value.</param>
     /// <param name="x">The Success value.</param>
+    /// <returns>A Success carrying <paramref name="x"/> and the given sequence of warnings materialized as a list.</returns>
     let warnmany<'TSuccess,'TMessage> (msgs:'TMessage seq) (x:'TSuccess) : Returns<'TSuccess,'TMessage> =
+        // Seq.toList forces evaluation once here, so the warnings are captured immediately rather than
+        // re-enumerating a lazy sequence on every future read.
         Success(x,msgs |> Seq.toList )
 
     /// <summary>
@@ -97,8 +114,11 @@ module Returns =
     /// <param name="predicate">Condition evaluated against the current Success value.</param>
     /// <param name="message">Warning message to append when the predicate is true.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The input with <paramref name="message"/> appended to its warnings when the predicate matches; otherwise the input unchanged.</returns>
     let warnIf (predicate: 'TSuccess -> bool) (message: 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
         match returns with
+        // Only a Success whose value satisfies the predicate gets the new warning appended; every other
+        // case (Success failing the predicate, or any Failure) falls through to the wildcard, unchanged.
         | Success (value, msgs) when predicate value -> Success (value, msgs @ [message])
         | _ -> returns
 
@@ -108,38 +128,46 @@ module Returns =
     /// Wraps a single message in a Failure of a <c>Returns</c> (result) type.
     /// </summary>
     /// <param name="msg">The Failure Message associated to the Failure status.</param>
-    let fail<'TSuccess,'TMessage> (msg:'TMessage) : Returns<'TSuccess,'TMessage> = 
+    /// <returns>A Failure carrying a single-element error list containing <paramref name="msg"/>.</returns>
+    let fail<'TSuccess,'TMessage> (msg:'TMessage) : Returns<'TSuccess,'TMessage> =
         Failure([ msg ])
 
     /// <summary>
     /// Wraps a list of message in a Failure of a <c>Returns</c> (result) type.
     /// </summary>
     /// <param name="msgs">The list of Failure Messages associated to the Failure status.</param>
-    let failmany<'TSuccess,'TMessage> (msgs:'TMessage seq) : Returns<'TSuccess,'TMessage> = 
+    /// <returns>A Failure carrying the given sequence of errors materialized as a list.</returns>
+    let failmany<'TSuccess,'TMessage> (msgs:'TMessage seq) : Returns<'TSuccess,'TMessage> =
         Failure( msgs |> Seq.toList )
 
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
-    /// Change the Success status of a <c>Returns</c> (result) type into a Failure status, 
+    /// Change the Success status of a <c>Returns</c> (result) type into a Failure status,
     /// if it contain any warning messages, transferring all the Warning Messages into the Failure container.
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>
+    /// A Failure carrying the former warnings when the input was a Success with at least one warning;
+    /// otherwise the input unchanged (clean Success or already-a-Failure).
+    /// </returns>
     let failOnWarnings (returns : Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
       match returns with
+      // Only escalate when there is at least one warning to escalate; a clean Success (no warnings) is left as-is.
       | Success (_, msgs) when msgs <> [] -> Failure msgs
       | _ -> returns
 
     // -------------------------------------------------------------------------------------- //
-        
+
     /// <summary>
     /// Takes a <c>Returns</c> (result) container and extract its Value in case of Success.
     /// Otherwise, returns the given (DEFAULT) value in case of Failure.
     /// </summary>
     /// <param name="value">The default value.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let defaultValue (value: 'TSuccess) (returns: Returns<'TSuccess,'TMessage>) : 'TSuccess = 
-        match returns with 
+    /// <returns>The Success value, or <paramref name="value"/> when the input is a Failure.</returns>
+    let defaultValue (value: 'TSuccess) (returns: Returns<'TSuccess,'TMessage>) : 'TSuccess =
+        match returns with
         | Success (x,_) -> x
         | _ -> value
 
@@ -147,20 +175,24 @@ module Returns =
     /// Otherwise, determine which (default) Value has to be to returned, in base to the generated list of Errors, using a given function as selector.
     /// <param name="compensation">The function that work as a selector to return the prover default value.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let defaultWith (compensation: 'TMessage list->'TSuccess) (returns: Returns<'TSuccess,'TMessage>) : 'TSuccess  = 
-        match returns with 
+    /// <returns>The Success value, or the result of applying <paramref name="compensation"/> to the accumulated errors when the input is a Failure.</returns>
+    let defaultWith (compensation: 'TMessage list->'TSuccess) (returns: Returns<'TSuccess,'TMessage>) : 'TSuccess  =
+        match returns with
         | Success (x,_) -> x
         | Failure errors -> compensation errors
 
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
-    /// Takes a <c>Returns</c> (result) container and extract its Value in case of Success. 
+    /// Takes a <c>Returns</c> (result) container and extract its Value in case of Success.
     /// Otherwise, raise/throw an exception with the list of Failure Messages associated to the Failure status.
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let valueOrFailwith (returns: Returns<'TSuccess,'TMessage>) : 'TSuccess = 
-        let concatenateMessages msgs = 
+    /// <returns>The Success value.</returns>
+    /// <exception cref="System.Exception">Thrown (via <c>failwith</c>) when the input is a Failure, with all error messages joined into the exception message.</exception>
+    let valueOrFailwith (returns: Returns<'TSuccess,'TMessage>) : 'TSuccess =
+        // Renders each error message via %O (calls its ToString()) and joins them for a single exception message.
+        let concatenateMessages msgs =
             msgs
             |> Seq.map (sprintf "%O")
             |> String.concat ("; ")
@@ -171,17 +203,20 @@ module Returns =
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
-    /// Creates a safe version of the supplied function, 
-    /// applying the given function to the specified input Value and 
-    /// catch its output as a <c>Returns</c> (result) container, 
+    /// Creates a safe version of the supplied function,
+    /// applying the given function to the specified input Value and
+    /// catch its output as a <c>Returns</c> (result) container,
     /// instead of throwing any internally raised exception/s.
     /// </summary>
     /// <param name="givenFunction">The function to be applied to the input value (that may raise an exception!).</param>
     /// <param name="value">The input value.</param>
+    /// <returns>A Success of the function's result, or a Failure carrying the caught exception.</returns>
     let tryCatch (givenFunction: 'TSuccess1 -> 'TSuccess2) (value:'TSuccess1) : Returns<'TSuccess2,exn> =
         try
             Success (givenFunction value ,[] )
         with
+        // OutOfMemoryException is deliberately NOT caught: swallowing it would let the process limp along in
+        // an unreliable state instead of terminating, which is generally worse than letting it propagate.
         | ex when not (ex :? OutOfMemoryException) -> Failure [ex]
 
     // -------------------------------------------------------------------------------------- //
@@ -190,8 +225,14 @@ module Returns =
     /// Takes a <c>Returns</c> (result) container and transfor it into an Active Pattern result (|Pass|Warn|Fail|).
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>
+    /// <c>Pass value</c> for a warning-free Success, <c>Warn (value, msgs)</c> for a Success carrying warnings,
+    /// or <c>Fail msgs</c> for a Failure.
+    /// </returns>
     let (|Pass|Warn|Fail|) (returns : Returns<'TSuccess,'TMessage>) =
       match returns with
+      // A Success with an empty warning list is distinguished from one that carries warnings, so callers
+      // can pattern-match on "clean success" vs "success with caveats" vs "failure" in one expression.
       | Success  (value, []  ) -> Pass  value
       | Success  (value, msgs) -> Warn (value,msgs)
       | Failure  msgs -> Fail msgs
@@ -203,7 +244,7 @@ module Returns =
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     /// <returns>Returns True if the input <c>Returns</c> (result) container is a Success, otherwise False if it is a Failure.</returns>
-    let isSucceeded (returns : Returns<'TSuccess,'TMessage>) = 
+    let isSucceeded (returns : Returns<'TSuccess,'TMessage>) =
         match returns with
         | Success _ -> true
         | _ -> false
@@ -213,7 +254,7 @@ module Returns =
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result)) type.</param>
     /// <returns>Returns True if the input <c>Returns</c> (result) container is a Failure, otherwise False if it is a Success.</returns>
-    let isFailure (returns : Returns<'TSuccess,'TMessage>) = 
+    let isFailure (returns : Returns<'TSuccess,'TMessage>) =
         match returns with
         | Failure _ -> true
         | _ -> false
@@ -223,9 +264,11 @@ module Returns =
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     /// <returns>Returns True if the input <c>Returns</c> (result) container has some messages, otherwise False.</returns>
-    let hasWarnings (returns : Returns<'TSuccess,'TMessage>) = 
+    let hasWarnings (returns : Returns<'TSuccess,'TMessage>) =
         match returns with
-        | Success (_, msgs) -> msgs.Length > 0
+        // List.isEmpty is O(1) (checks the union case) unlike List.Length, which would walk the whole list
+        // just to compare it against zero.
+        | Success (_, msgs) -> not (List.isEmpty msgs)
         | _ -> false
 
     // -------------------------------------------------------------------------------------- //
@@ -234,7 +277,8 @@ module Returns =
     /// Takes a <c>Returns</c> (result) container and transform it into an Option container.
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let toOption (returns : Returns<'TSuccess,'TMessage>)  = 
+    /// <returns><c>Some (value, warnings)</c> for a Success; <c>None</c> for a Failure (the error messages are discarded).</returns>
+    let toOption (returns : Returns<'TSuccess,'TMessage>)  =
         match returns with
         | Success (value,warns) -> Some (value,warns)
         | Failure (_) -> Option.None
@@ -243,12 +287,13 @@ module Returns =
     /// Takes a Option and transform it into an <c>Returns</c> (result) container.
     /// If Some then its Value is wrapped into a Success otherwise returns a Failure with the specified message.
     /// </summary>
-    /// <param name="failureMesssage">The input option type.</param>
+    /// <param name="failureMesssage">The message to use for the Failure produced when the option is None.</param>
     /// <param name="option">The input option type.</param>
-    let ofOption (failureMesssage:'TMessage) (option:option<'TSuccess>) = 
+    /// <returns>A Success wrapping the option's value when <c>Some</c>; otherwise a Failure carrying <paramref name="failureMesssage"/>.</returns>
+    let ofOption (failureMesssage:'TMessage) (option:option<'TSuccess>) =
         match option with
         | Some x -> ok x
-        | None -> fail failureMesssage 
+        | None -> fail failureMesssage
 
     // -------------------------------------------------------------------------------------- //
 
@@ -256,6 +301,7 @@ module Returns =
     /// Converts a <c>Returns</c> (result) container into a Choice container.
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns><c>Choice1Of2 (value, warnings)</c> for a Success; <c>Choice2Of2 errors</c> for a Failure.</returns>
     let toChoice (returns : Returns<'TSuccess,'TMessage>) =
         match returns with
         | Success (value,warns) -> Choice1Of2 (value,warns)
@@ -264,7 +310,8 @@ module Returns =
     /// <summary>
     /// Converts a Choice into a r<c>Returns</c> (result) container.
     /// </summary>
-    /// <param name="choice">The input choice type.</param>
+    /// <param name="choice">The input choice type: Choice1Of2 (value, warnings) for success, Choice2Of2 errors for failure.</param>
+    /// <returns>A Success wrapping the Choice1Of2 payload, or a Failure wrapping the Choice2Of2 errors.</returns>
     let ofChoice (choice : Choice<'TSuccess * 'TMessage list, 'TMessage list>) =
         match choice with
         | Choice1Of2 (value, warns) -> Success (value, warns)
@@ -276,6 +323,7 @@ module Returns =
     /// Converts a <c>Returns</c> (result) container into a Choice.
     /// </summary>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns><c>Result.Ok (value, warnings)</c> for a Success; <c>Result.Error errors</c> for a Failure.</returns>
     let toResult (returns : Returns<'TSuccess,'TMessage>) =
         match returns with
         | Success (value,warns) -> Result.Ok (value, warns)
@@ -284,6 +332,8 @@ module Returns =
     /// <summary>
     /// Converts a Result into a <c>Returns</c> (result) container.
     /// </summary>
+    /// <param name="result">A Result whose Ok case carries a value together with its warnings.</param>
+    /// <returns>A Success carrying the Ok payload, or a Failure carrying the Error payload.</returns>
     let ofResult (result: Result<'TSuccess * 'TMessage list, 'TMessage list>) =
         match result with
         | Result.Ok (value, warns) -> Success (value, warns)
@@ -294,20 +344,22 @@ module Returns =
     // ********************
     // **    EITHER     ***
     // ********************
-   
+
     /// <summary>
     /// Takes an input <c>Returns</c> (result) container, and:
-    /// 
-    /// if it is a Success, maps its Success Value, along with its Warning Messages (if any), with the given "fSuccess" function;   
-    /// 
+    ///
+    /// if it is a Success, maps its Success Value, along with its Warning Messages (if any), with the given "fSuccess" function;
+    ///
     /// if it is a Failure, maps it Error Messages with the given "fFailure" function.
     /// </summary>
     /// <param name="fSuccess">Function to be applied to source, if it contains a Success value.</param>
     /// <param name="fFailure">Function to be applied to source, if it contains a Failure value.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     /// <returns>The result of applying either functions.</returns>
-    let inline either (fSuccess) (fFailure) (returns : Returns<'TSuccess,'TMessage>)  = 
+    let inline either (fSuccess) (fFailure) (returns : Returns<'TSuccess,'TMessage>)  =
         match returns with
+        // Both branches receive everything the case carries (value+warnings, or errors), so callers
+        // never need to re-destructure the Returns value themselves.
         | Success(s, msgs) -> fSuccess (s, msgs)
         | Failure(errs) -> fFailure (errs)
 
@@ -321,13 +373,16 @@ module Returns =
     /// Takes an input <c>Returns</c> (result) container, and:
     ///
     /// if it is a Success, appends the given (new) messages to the existing warning messages (if any)
-    /// 
+    ///
     /// if it is a Failure, appends the given (new) messages to the existing error messages.
     /// </summary>
     /// <param name="messages">The given (new) messages to be appended the existing waring or error messages.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     /// <returns>The result of merging the given (new) messages to the existing warning or error messages, in base of the current status of the input <c>Returns</c> (result) container.</returns>
-    let inline jointMessages (messages : 'TMessage list) (returns : Returns<'TSuccess,'TMessage>) = 
+    let inline jointMessages (messages : 'TMessage list) (returns : Returns<'TSuccess,'TMessage>) =
+        // Note the append order: the returns' OWN messages come first, then the supplied "messages" - this
+        // is what gives `bind` its documented (and test-covered) "newest step's messages first" ordering
+        // when composed in a chain, since each step's own result becomes the "messages" side of the next call.
         let fSuccess (x, msgs) = Success(x, msgs @ messages)
         let fFailure errs = Failure(errs @ messages)
         either fSuccess fFailure returns
@@ -336,13 +391,13 @@ module Returns =
     /// Takes an input <c>Returns</c> (result) container, and:
     ///
     /// if it is a Success, appends the given (new) message to the existing warning messages (if any)
-    /// 
+    ///
     /// if it is a Failure, appends the given (new) message to the existing error messages.
     /// </summary>
     /// <param name="message">The given (new) message to be appended the existing waring or error messages.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     /// <returns>The result of merging the given (new) message to the existing warning or error messages, in base of the current status of the input <c>Returns</c> (result) container.</returns>
-    let inline jointMessage (message : 'TMessage) (returns : Returns<'TSuccess,'TMessage>) = 
+    let inline jointMessage (message : 'TMessage) (returns : Returns<'TSuccess,'TMessage>) =
         jointMessages [message] returns
 
     // -------------------------------------------------------------------------------------- //
@@ -350,7 +405,7 @@ module Returns =
     // ********************
     // **     BIND      ***
     // ********************
-    
+
     /// <summary>
     /// Takes an input <c>Returns</c> (result) container, and:
     ///
@@ -360,10 +415,13 @@ module Returns =
     /// </summary>
     /// <param name="switchFunction">The given SWITH function to be applied to the Success Value of the input (must return a <c>Returns</c> (result) container).</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    /// Note: useful for composing <c>Returns</c> (result) container sequentially. 
+    /// Note: useful for composing <c>Returns</c> (result) container sequentially.
     /// Note: this bind does not accumulate errors.
     /// Note: the infix operator version is: ">>=".
-    let inline bind (switchFunction : 'TSuccess1 -> Returns<'TSuccess2,'TMessage> ) (returns : Returns<'TSuccess1,'TMessage>) = 
+    /// <returns>The Failure unchanged if the input failed; otherwise the result of <paramref name="switchFunction"/> with the input's warnings folded in.</returns>
+    let inline bind (switchFunction : 'TSuccess1 -> Returns<'TSuccess2,'TMessage> ) (returns : Returns<'TSuccess1,'TMessage>) =
+        // On Success, run the next step and fold this step's warnings into its result (see jointMessages
+        // for the resulting message ordering); on Failure, short-circuit and propagate the errors as-is.
         let fSuccess (s, msgs) = switchFunction  s |> jointMessages msgs
         let fFailure (msgs) = Failure msgs
         either fSuccess fFailure returns
@@ -386,8 +444,11 @@ module Returns =
     /// <param name="wrappedSuccessFunction">The given function, wrapped inside a <c>Returns</c> (result) container, to be applied to the input Success Value.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     /// <returns>The result of applying either functions.</returns>
-    let inline apply (wrappedSuccessFunction : Returns<'TSuccess1->'TSuccess2,'TMessage>) (returns : Returns<'TSuccess1,'TMessage>) = 
+    let inline apply (wrappedSuccessFunction : Returns<'TSuccess1->'TSuccess2,'TMessage>) (returns : Returns<'TSuccess1,'TMessage>) =
         match wrappedSuccessFunction, returns with
+        // Applicative semantics: unlike bind, BOTH sides are always evaluated up-front (neither one
+        // short-circuits the other), so two Failures concatenate their errors rather than only the first
+        // one surfacing.
         | Success(f, msgs1), Success(x, msgs2) -> Success(f x, msgs1 @ msgs2)
         | Failure errs, Success(_, _) -> Failure(errs)
         | Success(_, _), Failure errs -> Failure(errs)
@@ -408,10 +469,13 @@ module Returns =
     /// </summary>
     /// <param name="successFunction">The given function to be applied to the input Success Value.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
-    let inline map (successFunction : 'TSuccess1 -> 'TSuccess2) (returns : Returns<'TSuccess1,'TMessage>) = 
+    /// <returns>A Success of the transformed value (warnings preserved), or the original Failure.</returns>
+    let inline map (successFunction : 'TSuccess1 -> 'TSuccess2) (returns : Returns<'TSuccess1,'TMessage>) =
+        // map is implemented in terms of apply: lift the plain function into a warning-free Success, then
+        // let apply's Success/Success case do the actual invocation.
         let wrappedSuccessFunction = ok successFunction
         apply wrappedSuccessFunction returns
-    
+
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
@@ -420,12 +484,15 @@ module Returns =
     /// </summary>
     /// <param name="conversionFunction">The conversion function (common for both the Warning and Error Message).</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The same case (Success/Failure) with every message transformed by <paramref name="conversionFunction"/>.</returns>
     let mapMessages (conversionFunction: 'TMessage1 -> 'TMessage2) (returns : Returns<'TSuccess,'TMessage1>) =
         match returns with
         | Success (x,msgs) ->
+            // Transform every warning message, keep the success value untouched.
             let msgs' = List.map conversionFunction msgs
             Success (x, msgs')
         | Failure errors ->
+            // Transform every error message.
             let errors' = List.map conversionFunction errors
             Failure errors'
 
@@ -433,6 +500,9 @@ module Returns =
     /// Transforms only the warning messages on a Success using the given function.
     /// The Success value and any Failure error messages are propagated unchanged.
     /// </summary>
+    /// <param name="f">The function used to transform each warning message.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>A Success with transformed warnings, or the original Failure untouched.</returns>
     let mapWarnings (f: 'TMessage -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
         match returns with
         | Success (value, msgs) -> Success (value, msgs |> List.map f)
@@ -442,6 +512,9 @@ module Returns =
     /// Transforms only the error messages on a Failure using the given function.
     /// The Failure errors are remapped; Success values and warnings are propagated unchanged.
     /// </summary>
+    /// <param name="f">The function used to transform each error message.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>A Failure with transformed errors, or the original Success untouched.</returns>
     let mapErrors (f: 'TMessage -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
         match returns with
         | Success _        -> returns
@@ -459,33 +532,42 @@ module Returns =
     /// <param name="successFunction">The given function to be applied to the input Success Value.</param>
     /// <param name="returns1">The first input <c>Returns</c> (result) type.</param>
     /// <param name="returns2">The second input <c>Returns</c> (result) type.</param>
-    let inline map2 (successFunction : 'TSuccess1 -> 'TSuccess2 -> 'TSuccess3) 
-                    (returns1 : Returns<'TSuccess1,'TMessage>) 
-                    (returns2 : Returns<'TSuccess2,'TMessage>) = 
+    /// <returns>The combined Success (warnings from both merged), or the (accumulated, per <see cref="apply"/>) Failure.</returns>
+    let inline map2 (successFunction : 'TSuccess1 -> 'TSuccess2 -> 'TSuccess3)
+                    (returns1 : Returns<'TSuccess1,'TMessage>)
+                    (returns2 : Returns<'TSuccess2,'TMessage>) =
         //successFunction <!> return1 <*> return2
+        // Standard applicative-style lifting: wrap the curried function in a Success, then apply it to each
+        // argument in turn via `apply` (which is what actually merges warnings/accumulates errors).
         ok successFunction
         |> apply <| returns1
         |> apply <| returns2
-        //match returns1, returns2 with 
-        //| Success (a,msga), Ok (bmsgsb) -> Ok (f returns1 returns1) 
+        //match returns1, returns2 with
+        //| Success (a,msga), Ok (bmsgsb) -> Ok (f returns1 returns1)
         //| Error e, _ | _, Error e -> Error e
 
     // -------------------------------------------------------------------------------------- //
 
-    /// Applies the given function, lifted/wrapped inside a  results (return) container in the Success status, 
+    /// Applies the given function, lifted/wrapped inside a  results (return) container in the Success status,
     /// to the Success Value of the given input <c>Returns</c> (result) container,
     /// if the input container is in a Succeeded status,
     /// otherwise the existing errors of the input container are propagated.
     ///
     /// The given function doesn't return a <c>Returns</c> (result) container.
     /// ( Synonym of "lift" <see cref="lift"/> ).
-    /// 
+    ///
     /// The function is applied to the first returns argument, then to the second returns argument, then to the third returns argument.
+    /// <param name="successFunction">The 3-argument function to lift and apply.</param>
+    /// <param name="returns1">The first input <c>Returns</c> (result) type.</param>
+    /// <param name="returns2">The second input <c>Returns</c> (result) type.</param>
+    /// <param name="returns3">The third input <c>Returns</c> (result) type.</param>
+    /// <returns>The combined Success (warnings from all three merged), or the accumulated Failure.</returns>
     let inline map3 successFunction
                     (returns1 : Returns<'TSuccess1,'TMessage>)
                     (returns2 : Returns<'TSuccess2,'TMessage>)
                     (returns3 : Returns<'TSuccess3,'TMessage>) =
         // successFunction <!> return1 <*> return2 <*> return3
+        // Same applicative-lift pattern as map2, extended with a third `apply`.
         ok successFunction
         |> apply <| returns1
         |> apply <| returns2
@@ -493,20 +575,27 @@ module Returns =
 
     // -------------------------------------------------------------------------------------- //
 
-    /// Applies the given function, lifted/wrapped inside a  results (return) container in the Success status, 
+    /// Applies the given function, lifted/wrapped inside a  results (return) container in the Success status,
     /// to the Success Value of the given input <c>Returns</c> (result) container,
     /// if the input container is in a Succeeded status,
     /// otherwise the existing errors of the input container are propagated.
     ///
     /// The given function doesn't return a <c>Returns</c> (result) container.
     /// ( Synonym of "lift" <see cref="lift"/> ).
-    /// 
+    ///
     /// The function is applied to the first returns argument, then to the second returns argument, then to the third returns argument, then to the fourth returns argument.
+    /// <param name="successFunction">The 4-argument function to lift and apply.</param>
+    /// <param name="returns1">The first input <c>Returns</c> (result) type.</param>
+    /// <param name="returns2">The second input <c>Returns</c> (result) type.</param>
+    /// <param name="returns3">The third input <c>Returns</c> (result) type.</param>
+    /// <param name="returns4">The fourth input <c>Returns</c> (result) type.</param>
+    /// <returns>The combined Success (warnings from all four merged), or the accumulated Failure.</returns>
     let inline map4 successFunction (returns1 : Returns<'TSuccess1,'TMessage>)
                                     (returns2 : Returns<'TSuccess2,'TMessage>)
                                     (returns3 : Returns<'TSuccess3,'TMessage>)
                                     (returns4 : Returns<'TSuccess4,'TMessage>) =
         // successFunction <!> return1 <*> return2 <*> return3
+        // Same applicative-lift pattern as map2/map3, extended with a fourth `apply`.
         ok successFunction
         |> apply <| returns1
         |> apply <| returns2
@@ -526,6 +615,8 @@ module Returns =
     /// <returns>A single Success of the value when it was nested with Success, or the Failure messages.</returns>
     /// <remarks><c>flatten</c> is equivalent to <c>bind id</c>.</remarks>
     let flatten (returns: Returns<Returns<'TSuccess,'TMessage>,'TMessage>) =
+        // `bind id` unwraps one layer of nesting: if the outer Returns is a Success, its payload is
+        // itself already a Returns, and `id` hands it straight back to `bind` to be joined in.
         returns |> bind id
 
     // -------------------------------------------------------------------------------------- //
@@ -547,7 +638,8 @@ module Returns =
     /// <param name="addFailure">The given function that define the mergin operation on erro messages.</param>
     /// <param name="returns1">The first input <c>Returns</c> (result) type.</param>
     /// <param name="returns2">The second input <c>Returns</c> (result) type.</param>
-    let inline merge (addSuccess) (addFailure) (returns1 : Returns<'TSuccess1,'TMessage>) (returns2 : Returns<'TSuccess2,'TMessage>) : Returns<'TSuccess3,'TMessage> = 
+    /// <returns>The merged Success, the merged Failure, or whichever single Failure applies.</returns>
+    let inline merge (addSuccess) (addFailure) (returns1 : Returns<'TSuccess1,'TMessage>) (returns2 : Returns<'TSuccess2,'TMessage>) : Returns<'TSuccess3,'TMessage> =
         match (returns1, returns2) with
         | Success (s1,msgs1), Success (s2,msgs2) -> Success ( addSuccess s1 s2, msgs1 @ msgs2 )
         | Failure errs, Success(_, _) -> Failure(errs)
@@ -555,11 +647,11 @@ module Returns =
         | Failure errs1, Failure errs2 -> Failure( addFailure errs1 errs2 )
 
     // -------------------------------------------------------------------------------------- //
-    
+
     // ********************
     // **   VALIDATE   ***
     // ********************
-    
+
     ///// <summary>
     ///// Takes two input <c>Returns</c> (result) container of the SAME TYPE, and:
     /////
@@ -574,7 +666,7 @@ module Returns =
     ///// If both the two inputs are in a success status, returns the first Success (merging any of their warning messages, if any).
     ///// If both the two inputs are in a failure status, returns a failure value, merging their error messages.
     ///// Otherwise propagate the Success status of any of the two inputs.
-    //let inline validate (returns1 : Returns<'TSuccess,'TMessage>) (returns2 : Returns<'TSuccess,'TMessage>) = 
+    //let inline validate (returns1 : Returns<'TSuccess,'TMessage>) (returns2 : Returns<'TSuccess,'TMessage>) =
     //    match (returns1, returns2) with
     //    | Success (s1,msgs1), Success (_,msgs2) -> Success ( s1, msgs1@msgs2 )
     //    | Failure _, Success (s2,msgs2)  -> Success (s2,msgs2)
@@ -587,20 +679,45 @@ module Returns =
     // **     FOLD      ***
     // ********************
 
+    /// <summary>
     /// Collects a sequence of <c>Returns</c> (result) container and accumulates their values .
     /// If the sequence contains successes only, any warning messages will be folded together and propagated as an success.
     /// If the sequence contains one or more errors, all the error messages will be folded together and propagated as an error.
-    let inline fold (folder: 'SuccesState->'TSuccess->'SuccesState) (state: Returns<'SuccesState,'Message>) (returns : Returns<'TSuccess,'Message> seq ) = 
+    /// </summary>
+    /// <param name="folder">Combines the running success state with each element's success value.</param>
+    /// <param name="state">The initial (seed) <c>Returns</c> value the fold starts from.</param>
+    /// <param name="returns">The sequence of <c>Returns</c> values to fold over.</param>
+    /// <returns>The final accumulated Success (all warnings collected, in order), or Failure (all errors collected, in order) once any element fails.</returns>
+    let inline fold (folder: 'SuccesState->'TSuccess->'SuccesState) (state: Returns<'SuccesState,'Message>) (returns : Returns<'TSuccess,'Message> seq ) =
+        // Accumulate warnings/errors in reverse to avoid repeated O(n) appends (state's message list would
+        // otherwise be re-copied on every element via "@"), then reverse once at the end. Mirrors traverseList.
+        let revAppend xs ys = List.fold (fun acc x -> x :: acc) ys xs
         use e = returns.GetEnumerator()
-        let mutable state = state
+        // Track progress as a Choice: Choice1Of2 while still accumulating a running Success (state, reversed
+        // messages-so-far); Choice2Of2 once any element has failed (reversed errors-so-far). Working with the
+        // reversed lists throughout avoids re-copying the growing accumulator on every iteration.
+        let mutable acc =
+            match state with
+            | Success (s, msgs) -> Choice1Of2 (s, List.rev msgs)
+            | Failure msgs       -> Choice2Of2 (List.rev msgs)
         while e.MoveNext() do
-            let addSuccess stateOk currentOk = folder stateOk currentOk
-            let addFailure stateError currentError = stateError @ currentError
-            state <- merge addSuccess addFailure state e.Current
-        state
+            acc <-
+                match acc, e.Current with
+                // Still succeeding, and the next element also succeeds: fold the value in, append its warnings.
+                | Choice1Of2 (s, msgsRev), Success (v, msgs) -> Choice1Of2 (folder s v, revAppend msgs msgsRev)
+                // Already failed: subsequent successes contribute nothing further; keep the accumulated errors as-is.
+                | Choice2Of2 errsRev,      Success _         -> Choice2Of2 errsRev
+                // Still succeeding, but this element fails: switch tracks to failure mode, seeded with its errors.
+                | Choice1Of2 _,            Failure errs      -> Choice2Of2 (List.rev errs)
+                // Already failed, and this element fails too: append its errors to the accumulated errors.
+                | Choice2Of2 errsRev,      Failure errs      -> Choice2Of2 (revAppend errs errsRev)
+        // Un-reverse the accumulated messages/errors exactly once, at the very end, to restore original order.
+        match acc with
+        | Choice1Of2 (s, msgsRev) -> Success (s, List.rev msgsRev)
+        | Choice2Of2 errsRev      -> Failure (List.rev errsRev)
 
     // -------------------------------------------------------------------------------------- //
-    
+
     // ********************
     // **      TEE      ***
     // ********************
@@ -614,7 +731,13 @@ module Returns =
     ///
     /// NOTE: the input <c>Returns</c> (result) containe is propagated unchanged.
     /// </summary>
+    /// <param name="fSuccess">Side-effecting function invoked with (value, warnings) on Success.</param>
+    /// <param name="fFailure">Side-effecting function invoked with the errors on Failure.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The original <paramref name="returns"/>, unchanged.</returns>
     let inline eitherTee fSuccess fFailure (returns : Returns<'TSuccess,'TMessage>) =
+        // Runs `f` purely for its side effect, then discards its result and hands back the original `x` -
+        // this is what makes `eitherTee` (and successTee/failureTee below) pass-through/transparent.
         let tee f x = f x; x;
         tee (either fSuccess fFailure) returns
 
@@ -623,7 +746,10 @@ module Returns =
     ///
     /// NOTE: the input <c>Returns</c> (result) containe is propagated unchanged.
     /// </summary>
-    let successTee successFunction (returns : Returns<'TSuccess,'TMessage>) = 
+    /// <param name="successFunction">Side-effecting function invoked with (value, warnings) on Success; ignored on Failure.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The original <paramref name="returns"/>, unchanged.</returns>
+    let successTee successFunction (returns : Returns<'TSuccess,'TMessage>) =
         eitherTee successFunction ignore returns
 
     /// <summary>
@@ -631,7 +757,10 @@ module Returns =
     ///
     /// NOTE: the input <c>Returns</c> (result) container is propagated unchanged.
     /// </summary>
-    let failureTee failureFunction (returns : Returns<'TSuccess,'TMessage>) = 
+    /// <param name="failureFunction">Side-effecting function invoked with the errors on Failure; ignored on Success.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The original <paramref name="returns"/>, unchanged.</returns>
+    let failureTee failureFunction (returns : Returns<'TSuccess,'TMessage>) =
         eitherTee ignore failureFunction returns
 
     // -------------------------------------------------------------------------------------- //
@@ -639,23 +768,28 @@ module Returns =
     // ********************
     // **     LOG       ***
     // ********************
-    
+
     /// <summary>
     /// Takes an input <c>Returns</c> (result) container, and:
-    /// 
+    ///
     /// if it is a Success, perform a log action on the Success Value, along with its Warning Messages (if any), with the given "logSuccess" function;
-    /// 
+    ///
     /// if it is a Failure, perform a log action on the Error Messages with the given "logFailure" function.
     /// </summary>
+    /// <param name="logger">The sink that receives the formatted log line (e.g. <c>Console.WriteLine</c>, a logging framework call, etc.).</param>
     /// <param name="record">Boolean value to indicate ioif teh Log action need to be performed (TRUE) or skipped (FALSE).</param>
     /// <param name="message">A description message.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The original <paramref name="returns"/>, unchanged (logging is a side effect only).</returns>
     let log (logger: string -> unit) (record:bool) (message:string) (returns : Returns<'TSuccess,'TMessage>) =
+        // Builds the two possible log lines up-front; only one of them actually gets invoked, based on the case.
         let successFunction (s, msgs) = logger (sprintf ">>> %s: Returns is a Success: %A (%A)" message s msgs)
         let failureFunction errs = logger (sprintf ">>> %s Returns is a Failure: %A" message errs)
         if record then
+            // eitherTee both performs the logging side effect and passes the original value straight through.
             eitherTee successFunction failureFunction returns
         else
+            // Logging disabled for this call: skip straight to returning the value unchanged.
             returns
 
     // -------------------------------------------------------------------------------------- //
@@ -664,49 +798,59 @@ module Returns =
     // **    SPECIAL     **
     // ********************
 
-    /// Compose two given (SWITCH) functions in series 
+    /// Compose two given (SWITCH) functions in series
     /// (i.e.: bind switchFunction1 >> bind switchFunction2).
     ///
     /// The given (SWITCH) functions must return a <c>Returns</c> (result) container.
-    /// 
-    /// Note: useful for composing <c>Returns</c> (result) container sequentially. 
+    ///
+    /// Note: useful for composing <c>Returns</c> (result) container sequentially.
     /// Note: this composition does not accumulate errors.
     /// Note: the infix operator version is: ">=>".
-    let inline compose 
-        ( switchFunction1: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>) 
+    /// <param name="switchFunction1">The first switch function to run.</param>
+    /// <param name="switchFunction2">The second switch function to run, only if the first one succeeded.</param>
+    /// <param name="value">The input value fed into <paramref name="switchFunction1"/>.</param>
+    /// <returns>The result of running both switch functions in sequence, short-circuiting on the first failure.</returns>
+    let inline compose
+        ( switchFunction1: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>)
         ( switchFunction2: 'TSuccess2 -> Returns<'TSuccess3,'TMessage>)
-        (value : 'TSuccess1) = 
+        (value : 'TSuccess1) =
 
         match ( switchFunction1 value ) with
+        // First step succeeded: run the second step and fold the first step's warnings into its result.
         | Success (s,msgs) -> ( switchFunction2 s ) |> ( jointMessages msgs )
-        | Failure f -> Failure f 
+        // First step failed: short-circuit, the second step never runs.
+        | Failure f -> Failure f
         (*
-        
+
             Alternative code:
                 value
                 |> bind switchFunction1 >> bind switchFunction2
-        
+
         *)
 
     // -------------------------------------------------------------------------------------- //
 
     /// Compose two given (SWITCH) functions in parallel with an AND logic
-    /// (bind switchFunction1 + bind switchFunction2). 
-    /// 
-    /// The behavior of the composition shall be specified by two other additional functions: 
+    /// (bind switchFunction1 + bind switchFunction2).
+    ///
+    /// The behavior of the composition shall be specified by two other additional functions:
     /// By the "addSuccess" function in case of Success of "successFunction1 returns" and "successFunction2 returns".
     /// By the "addFailure" function in case of Failure of "successFunction1 returns" and "successFunction2 returns".
     ///
     /// The given (SHWITCH) functions must return a <c>Returns</c> (result) container.
-    /// 
-    /// Note: useful for composing <c>Returns</c> (result) container in parallel. 
+    ///
+    /// Note: useful for composing <c>Returns</c> (result) container in parallel.
     /// Note: this composition may accumulate errors, if this behavior is implemented in the "addFailure" function.
     /// Note: the infix operator version is: "&&&".
     /// <param name="addSuccess">Define the behavior of the plus (composition), in case of success of both the input sources.</param>
     /// <param name="addFailure">Define the behavior of the plus (composition), in case of failure of both the input sources.</param>
-    /// <param name="source1">The first input source.</param>
-    /// <param name="source2">The second input source.</param>
-    let inline plus addSuccess addFailure switchFunction1 switchFunction2 value = 
+    /// <param name="switchFunction1">The first switch function to run against <paramref name="value"/>.</param>
+    /// <param name="switchFunction2">The second switch function to run against <paramref name="value"/>.</param>
+    /// <param name="value">The shared input value fed into both switch functions.</param>
+    /// <returns>The merged Success, the merged Failure, or whichever single Failure applies.</returns>
+    let inline plus addSuccess addFailure switchFunction1 switchFunction2 value =
+        // Both switch functions are always invoked against the same value (neither short-circuits the other),
+        // which is what makes this a "parallel" (as opposed to sequential/bind-style) composition.
         match (switchFunction1 value, switchFunction2 value) with
         | Success (s1,msgs1),Success (s2,msgs2) -> Success ( addSuccess s1 s2, msgs1@msgs2 )
         | Failure f1,Success _  -> Failure f1
@@ -717,7 +861,10 @@ module Returns =
 
     /// Applies the given "dead-end function" to a "value" and return the input "value" ignoring the results of the given function.
     /// (">=> toSwitchFunction" is exactly the same as ">> map").
-    let tee (successFunction: 'TSuccess1 -> 'TSuccess2) (value: 'TSuccess1) = 
+    /// <param name="successFunction">The side-effecting function to run against <paramref name="value"/>; its result is discarded.</param>
+    /// <param name="value">The value to pass through unchanged.</param>
+    /// <returns><paramref name="value"/>, unchanged.</returns>
+    let tee (successFunction: 'TSuccess1 -> 'TSuccess2) (value: 'TSuccess1) =
         successFunction value |> ignore
         value
 
@@ -726,21 +873,28 @@ module Returns =
     /// <summary>
     /// Creates two lists by classifying the values depending on whether they were wrapped with Ok or Error.
     /// </summary>
+    /// <param name="returns">The list of <c>Returns</c> values to partition.</param>
     /// <returns>
     /// A tuple with both resulting lists, Oks are in the first list.
     /// </returns>
     let partition (returns: list<Returns<'TSuccess, 'TMessage>>) =
+        // Tail-recursive single pass, building both accumulator lists in reverse order as it goes.
         let rec loop ((acc1, acc2) as acc) = function
             | [] -> acc
             | x::xs ->
                 match x with
                 | Success (v,msgs) -> loop ((v,msgs)::acc1, acc2) xs
                 | Failure e -> loop (acc1, e::acc2) xs
+        // The input is reversed up-front so that, combined with the reverse-prepend accumulation above,
+        // both output lists come out in the original input order without a second List.rev pass at the end.
         loop ([], []) (List.rev returns)
 
     // -------------------------------------------------------------------------------------- //
 
     /// Takes two results and returns a tuple of the pair
+    /// <param name="x1">The first <c>Returns</c> value.</param>
+    /// <param name="x2">The second <c>Returns</c> value.</param>
+    /// <returns>A Success of the tupled values (warnings merged) if both succeeded; otherwise the first Failure encountered (x1 takes priority over x2).</returns>
     let zip x1 x2 =
         match x1, x2 with
         | Success (x1res,msgs1) , Success (x2res,msgs2) -> Success( (x1res, x2res), msgs1 @ msgs2 )
@@ -759,17 +913,25 @@ module Returns =
     /// Maps each element of a list through a switch function and collects results into a single Returns.
     /// All errors are accumulated: if any element fails, failures from every failing element are merged.
     /// </summary>
+    /// <param name="switchFunction">The function applied to each input element, producing a <c>Returns</c> per element.</param>
+    /// <param name="inputs">The list of values to map and combine.</param>
+    /// <returns>A Success of the list of mapped values (all warnings merged, in order) if every element succeeded; otherwise a Failure with every accumulated error, in order.</returns>
     let traverseList (switchFunction: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>) (inputs: 'TSuccess1 list) : Returns<'TSuccess2 list,'TMessage> =
         // Accumulate warnings/errors in reverse to avoid repeated O(n) appends, then reverse once at the end.
         let revAppend xs ys = List.fold (fun acc x -> x :: acc) ys xs
         let folder state current =
             match state, switchFunction current with
+            // Still succeeding, and this element also succeeds: prepend its value, append its warnings (in reverse-accumulator form).
             | Success (acc, msgsRev), Success (v, msgs) -> Success (v :: acc, revAppend msgs msgsRev)
+            // Already failed: subsequent successes contribute nothing further to the accumulated errors.
             | Failure errsRev,        Success _         -> Failure errsRev
+            // Still succeeding, but this element fails: switch to failure mode, seeded with its (reversed) errors.
             | Success _,              Failure errs      -> Failure (List.rev errs)
+            // Already failed, and this element fails too: append its errors to the accumulated errors.
             | Failure errsRev,        Failure errs      -> Failure (revAppend errs errsRev)
 
         match List.fold folder (Success ([], [])) inputs with
+        // Un-reverse both the collected values and the collected messages/errors exactly once, at the end.
         | Success (acc, msgsRev) -> Success (List.rev acc, List.rev msgsRev)
         | Failure errsRev        -> Failure (List.rev errsRev)
 
@@ -777,7 +939,10 @@ module Returns =
     /// Converts a list of Returns into a Returns of a list, accumulating all errors if any element is a Failure.
     /// Equivalent to traverseList id.
     /// </summary>
+    /// <param name="returns">The list of <c>Returns</c> values to sequence.</param>
+    /// <returns>A Success of the list of values (warnings merged) if every element succeeded; otherwise a Failure with every accumulated error.</returns>
     let sequenceList (returns: Returns<'TSuccess,'TMessage> list) : Returns<'TSuccess list,'TMessage> =
+        // No per-element transformation needed - traversing with `id` is exactly "sequence".
         traverseList id returns
 
     // -------------------------------------------------------------------------------------- //
@@ -792,33 +957,48 @@ module Returns =
     /// If every validator succeeds, returns a Success of the original value with all warnings merged.
     /// If any validator fails, returns a Failure with every accumulated error (no short-circuiting).
     /// </summary>
+    /// <param name="validators">The independent validators to run against <paramref name="value"/>.</param>
+    /// <param name="value">The value being validated; also the value returned on overall success.</param>
+    /// <returns>A Success of <paramref name="value"/> with every warning merged, or a Failure with every error merged.</returns>
     let validateAll (validators: ('TSuccess -> Returns<unit,'TMessage>) list) (value: 'TSuccess) : Returns<'TSuccess,'TMessage> =
+        // Every validator runs unconditionally against the same value (no short-circuiting), so all of
+        // them get a chance to report a problem in a single pass.
         let results = validators |> List.map (fun v -> v value)
+        // Pull out just the error messages from any failing validator...
         let errors  = results |> List.collect (fun r -> match r with | Failure msgs       -> msgs | _ -> [])
+        // ...and, separately, just the warning messages from any (still-successful) validator.
         let warns   = results |> List.collect (fun r -> match r with | Success (_, msgs)  -> msgs | _ -> [])
         match errors with
+        // No errors at all: overall success, carrying every warning collected along the way.
         | [] -> Success (value, warns)
+        // At least one validator failed: overall failure, carrying every error collected (warnings are dropped).
         | _  -> Failure errors
 
     // -------------------------------------------------------------------------------------- //
 
+    /// <summary>
+    /// Infix/operator forms of the core <c>Returns</c> combinators, auto-opened alongside the <c>Returns</c> module.
+    /// </summary>
     [<AutoOpen>]
     module Operators =
 
         // -------------------------------------------------------------------------------------- //
-        
-        /// Applies the given (SWITCH) function 
+
+        /// Applies the given (SWITCH) function
         /// to the Success Value of the given input <c>Returns</c> (result) container,
         /// if the input container is in a Succeeded status,
-        /// otherwise 
+        /// otherwise
         /// the existing errors of the input container are propagated.
         ///
         /// The given (SWITCH) function must return a <c>Returns</c> (result) container.
-        /// 
-        /// Note: useful for composing <c>Returns</c> (result) container sequentially. 
+        ///
+        /// Note: useful for composing <c>Returns</c> (result) container sequentially.
         /// Note: this bind does not accumulate errors.
         /// Note: this is the infix operator version of "Results.bind".
-        let inline (>>=) returns successFunction = 
+        /// <param name="returns">The input <c>Returns</c> (result) container.</param>
+        /// <param name="successFunction">The switch function to bind with.</param>
+        /// <returns>The result of <c>Returns.bind successFunction returns</c>.</returns>
+        let inline (>>=) returns successFunction =
             bind successFunction returns
             (*
             static member
@@ -833,10 +1013,13 @@ module Returns =
         /// (i.e.: bind switchFunction1 >> bind switchFunction2).
         ///
         /// The given (SWITCH) functions must return a <c>Returns</c> (result) container.
-        /// 
-        /// Note: useful for composing <c>Returns</c> (result) container sequentially.  
+        ///
+        /// Note: useful for composing <c>Returns</c> (result) container sequentially.
         /// Note: this composition does not accumulate errors.
-        let inline (>=>) switchFunction1 switchFunction2 = 
+        /// <param name="switchFunction1">The first switch function to run.</param>
+        /// <param name="switchFunction2">The second switch function to run, only if the first one succeeded.</param>
+        /// <returns>A single function equivalent to running <paramref name="switchFunction1"/> then <paramref name="switchFunction2"/> in sequence.</returns>
+        let inline (>=>) switchFunction1 switchFunction2 =
             compose switchFunction1 switchFunction2
         (*
         static member
@@ -846,16 +1029,19 @@ module Returns =
         *)
 
         // -------------------------------------------------------------------------------------- //
-        
+
         /// This is the infix operator version of "Results.compose".
         /// Compose two given (SWITCH) functions in series (LEFT COMPOSITION)
         /// (i.e.: bind successFunction1 >> bind switchFunction2).
         ///
         /// The given (SWITCH) functions must return a <c>Returns</c> (result) container.
-        /// 
-        /// Note: useful for composing <c>Returns</c> (result) container sequentially. 
+        ///
+        /// Note: useful for composing <c>Returns</c> (result) container sequentially.
         /// Note: this composition does not accumulate errors.
-        let inline (<=<) successFunction2 successFunction1 = 
+        /// <param name="successFunction2">The second (right-hand) switch function, applied last.</param>
+        /// <param name="successFunction1">The first (left-hand) switch function, applied first.</param>
+        /// <returns>A single function equivalent to running <paramref name="successFunction1"/> then <paramref name="successFunction2"/> in sequence.</returns>
+        let inline (<=<) successFunction2 successFunction1 =
             compose successFunction1 successFunction2
         (*
         static member
@@ -865,124 +1051,206 @@ module Returns =
         *)
 
         // -------------------------------------------------------------------------------------- //
-        
+
         /// This is the infix operator version of "Results.lift".
-        /// Applies the given function, lifted/wrapped inside a a Success results (return) container, 
+        /// Applies the given function, lifted/wrapped inside a a Success results (return) container,
         /// to the Success Value of the given input <c>Returns</c> (result) container,
         /// if the input container is in a Succeeded status,
         /// otherwise the existing error of the input container is propagated.
-        let inline (<!>) successFunction = 
-            map successFunction 
-            (* 
+        /// <param name="successFunction">The plain function to lift and map with.</param>
+        /// <returns>A function <c>Returns&lt;'a,'c&gt; -&gt; Returns&lt;'b,'c&gt;</c> equivalent to <c>Returns.map successFunction</c>.</returns>
+        let inline (<!>) successFunction =
+            map successFunction
+            (*
             static member
                 ( <!> ) : successFunction:('a -> 'b) * returns:Returns<'a,'c> ->
                           -> Returns<'b,'c>
             *)
-            
+
         // -------------------------------------------------------------------------------------- //
-        
+
         /// This is the infix operator version of "Results.apply".
-        /// Applies the given function, already wrapped inside a Success or Failure results (return) container, 
+        /// Applies the given function, already wrapped inside a Success or Failure results (return) container,
         /// to the Success Value of the given input <c>Returns</c> (result) container,
         /// if both the containers are in a Succeeded status,
         /// otherwise the existing error of either the two (input and function) containers is propagated.
-        let inline (<*>) wrappedSuccessFunction  = 
-            apply wrappedSuccessFunction 
+        /// <param name="wrappedSuccessFunction">The function already wrapped in a <c>Returns</c> container.</param>
+        /// <returns>A function <c>Returns&lt;'a,'c&gt; -&gt; Returns&lt;'b,'c&gt;</c> equivalent to <c>Returns.apply wrappedSuccessFunction</c>.</returns>
+        let inline (<*>) wrappedSuccessFunction  =
+            apply wrappedSuccessFunction
             (*
             static member
                 ( <*> ) : wrappedSuccessFunction:Returns<('a -> 'b),'c> * returns:Returns<'a,'c>
                           -> Returns<'b,'c>
             *)
-        
+
         // -------------------------------------------------------------------------------------- //
 
         /// Compose two given (SWITCH) functions in parallel with an AND logic
-        /// (bind switchFunction1 + bind switchFunction2). 
-        /// 
-        /// The behavior of the composition shall be specified by two other additional functions: 
+        /// (bind switchFunction1 + bind switchFunction2).
+        ///
+        /// The behavior of the composition shall be specified by two other additional functions:
         /// By the "addSuccess" function in case of Success of "successFunction1 returns" and "successFunction2 returns".
         /// By the "addFailure" function in case of Failure of "successFunction1 returns" and "successFunction2 returns".
         ///
         /// The given (SHWITCH) functions must return a <c>Returns</c> (result) container.
-        /// 
-        /// Note: useful for composing <c>Returns</c> (result) container in parallel. 
+        ///
+        /// Note: useful for composing <c>Returns</c> (result) container in parallel.
         /// Note: this composition may accumulate errors, if this behavior is implemented in the "addFailure" function.
         /// Note: the infix operator version is: "&&&".
         /// Note: this is the infix operator version of "Results.plus".
-        let inline (&&&) switchFunction1 switchFunction2 = 
+        /// <param name="switchFunction1">The first switch function to run against the shared input.</param>
+        /// <param name="switchFunction2">The second switch function to run against the shared input.</param>
+        /// <returns>A single function running both switch functions in parallel, keeping the first Success value and concatenating errors on double failure.</returns>
+        let inline (&&&) switchFunction1 switchFunction2 =
+            // On double-success, arbitrarily keep the first branch's value (the caller only wanted validation,
+            // not a value to combine); on double-failure, concatenate both branches' error messages.
             let addSuccess s1 _ = s1
             let addFailure errs1 errs2 = errs1 @ errs2  // concatenate error messages.
             plus addSuccess addFailure switchFunction1 switchFunction2
-            (* 
+            (*
             static member
-                ( &&& ) : switchFunction1:('a -> Returns<'b,'c>) * switchFunction2:('a -> Returns<'d,'c>) 
-                          -> ('a -> Returns<'b,'c>) 
+                ( &&& ) : switchFunction1:('a -> Returns<'b,'c>) * switchFunction2:('a -> Returns<'d,'c>)
+                          -> ('a -> Returns<'b,'c>)
             *)
 
 // -------------------------------------------------------------------------------------- //
 // -------------------------------------------------------------------------------------- //
 
-/// Builder type for error handling computation expressions.
+/// <summary>
+/// Computation-expression builder type that enables the <c>returns { ... }</c> syntax, giving Railway-Oriented
+/// error handling (<c>let!</c>/<c>do!</c> that short-circuit on Failure, <c>and!</c> for accumulating parallel
+/// validation) over the <c>Returns&lt;'TSuccess,'TMessage&gt;</c> type.
+/// </summary>
 [<Sealed>]
-type ReturnsBuilder() = 
-        
+type ReturnsBuilder() =
+
+    /// <summary>Produces the "no result" value for an empty CE block: a warning-free Success of unit.</summary>
+    /// <returns>A Success of <c>()</c> with no warnings.</returns>
     member __.Zero() = Returns.ok()
 
+    /// <summary>Identity hook the F# compiler uses to normalize already-<c>Returns</c>-typed expressions used in <c>let!</c>/<c>and!</c>.</summary>
+    /// <param name="returns">The <c>Returns</c> value to pass through unchanged.</param>
+    /// <returns><paramref name="returns"/>, unchanged.</returns>
     member inline _.Source(returns: Returns<_, _>) : Returns<_, _> = returns
-        
+
+    /// <summary>Implements <c>let! x = m in ...</c>: sequential (short-circuiting) binding.</summary>
+    /// <param name="m">The <c>Returns</c> value being bound.</param>
+    /// <param name="f">The continuation to run with the unwrapped Success value.</param>
+    /// <returns>The result of <c>Returns.bind f m</c>.</returns>
     member __.Bind(m, f) = Returns.bind f m
 
+    /// <summary>Implements <c>let! x = m in return f x</c> as a single step (used by the compiler as an optimization of Bind+Return).</summary>
+    /// <param name="x">The <c>Returns</c> value being bound.</param>
+    /// <param name="f">The plain (non-Returns-returning) function to map the unwrapped Success value with.</param>
+    /// <returns>The result of <c>Returns.map f x</c>.</returns>
     member __.BindReturn(x: Returns<'T, 'U>, f) = Returns.map f x
 
     /// Enables the <c>and!</c> syntax for parallel binding.
     /// Both branches are evaluated independently; errors from both failures are accumulated.
+    /// <param name="t1">The first parallel branch.</param>
+    /// <param name="t2">The second parallel branch.</param>
+    /// <returns>A Success of the tupled values (warnings merged) if both succeeded; a Failure with both branches' errors concatenated if both failed; otherwise the single Failure that occurred.</returns>
     member __.MergeSources(t1: Returns<'T1,'M>, t2: Returns<'T2,'M>) : Returns<'T1 * 'T2,'M> =
         match t1, t2 with
+        // Both succeeded: tuple the values, merge the warnings.
         | Success (v1, msgs1), Success (v2, msgs2) -> Success ((v1, v2), msgs1 @ msgs2)
+        // Both failed: this is what gives `and!` its error-accumulating (as opposed to short-circuiting) behavior.
         | Failure errs1,       Failure errs2        -> Failure (errs1 @ errs2)
+        // Exactly one failed: propagate that single failure.
         | Failure errs,        _                    -> Failure errs
         | _,                   Failure errs         -> Failure errs
 
+    /// <summary>Implements <c>return x</c>: wraps a plain value in a warning-free Success.</summary>
+    /// <param name="x">The value to wrap.</param>
+    /// <returns>The result of <c>Returns.ok x</c>.</returns>
     member __.Return(x) = Returns.ok x
-        
+
+    /// <summary>Implements <c>return! m</c>: returns an already-<c>Returns</c>-typed value as-is.</summary>
+    /// <param name="x">The <c>Returns</c> value to return directly.</param>
+    /// <returns><paramref name="x"/>, unchanged.</returns>
     member __.ReturnFrom(x) = x
-        
+
+    /// <summary>Implements sequencing of two statements in the CE body (e.g. <c>do! a; b</c>): runs <paramref name="a"/>, and if it succeeds, continues with <paramref name="b"/>.</summary>
+    /// <param name="a">The first (unit-typed) computation to run.</param>
+    /// <param name="b">The continuation to run if <paramref name="a"/> succeeded.</param>
+    /// <returns>The result of <c>Returns.bind b a</c>.</returns>
     member __.Combine (a, b) = Returns.bind b a
-        
+
+    /// <summary>Delays evaluation of a CE block's body until it is actually run, as required by the CE machinery.</summary>
+    /// <param name="f">The thunk wrapping the delayed computation.</param>
+    /// <returns><paramref name="f"/>, unchanged.</returns>
     member __.Delay f = f
-        
+
+    /// <summary>Forces evaluation of a delayed computation produced by <see cref="Delay"/>.</summary>
+    /// <param name="f">The thunk to invoke.</param>
+    /// <returns>The result of invoking <paramref name="f"/>.</returns>
     member __.Run f = f ()
-        
+
+    /// <summary>Implements <c>try ... with ...</c> inside the CE.</summary>
+    /// <param name="body">The protected computation.</param>
+    /// <param name="handler">The exception handler, invoked if <paramref name="body"/> throws.</param>
+    /// <returns>The result of <paramref name="body"/>, or of <paramref name="handler"/> if an exception was thrown and caught.</returns>
     member __.TryWith (body, handler) =
         try
             body()
         with
         | e -> handler e
-        
+
+    /// <summary>Implements <c>try ... finally ...</c> inside the CE.</summary>
+    /// <param name="body">The protected computation.</param>
+    /// <param name="compensation">The cleanup action, always run whether or not <paramref name="body"/> threw.</param>
+    /// <returns>The result of <paramref name="body"/>.</returns>
     member __.TryFinally (body, compensation) =
         try
             body()
         finally
             compensation()
-        
+
+    /// <summary>Implements <c>use d = ... in body d</c>: ensures <paramref name="d"/> is disposed after <paramref name="body"/> completes, mirroring the standard <c>IDisposable</c> "use" pattern.</summary>
+    /// <param name="d">The disposable resource (possibly null, which is tolerated).</param>
+    /// <param name="body">The computation that uses the resource.</param>
+    /// <returns>The result of running <paramref name="body"/> with <paramref name="d"/>, disposing it afterwards.</returns>
     member x.Using(d:#IDisposable, body) =
         let returns = fun () -> body d
         x.TryFinally (returns, fun () ->
             match d with
             | null -> ()
             | d -> d.Dispose())
-        
-    member x.While (guard, body) =
-        if not <| guard () then
-            x.Zero()
-        else
-            Returns.bind (fun () -> x.While(guard, body)) (body())
-        
+
+    /// <summary>Implements <c>while guard do body</c> inside the CE, accumulating warnings from every iteration and stopping (propagating the error) at the first Failure.</summary>
+    /// <param name="guard">The loop condition, re-checked before each iteration.</param>
+    /// <param name="body">The loop body; must produce a <c>Returns&lt;unit,'TMessage&gt;</c> each iteration.</param>
+    /// <returns>A Success of unit with every iteration's warnings collected (in order) if the loop ran to completion; otherwise the first Failure encountered, with all warnings collected up to that point prepended to its errors.</returns>
+    member _.While (guard, body) =
+        // Iterative (not recursive): a recursive formulation via Returns.bind would grow the call
+        // stack by one frame per loop iteration and overflow on long-running `while` loops.
+        // warningsRev accumulates warnings in reverse (cheap prepend) across iterations; reversed back at the end.
+        let mutable warningsRev : 'TMessage list = []
+        // Once set, `failure` holds the terminal Failure result and the loop condition below stops iterating.
+        let mutable failure : Returns<unit,'TMessage> option = None
+        while failure.IsNone && guard () do
+            match body () with
+            // Iteration succeeded (with possibly some warnings): fold its warnings into the running total and keep looping.
+            | Success ((), msgs) -> warningsRev <- List.fold (fun acc m -> m :: acc) warningsRev msgs
+            // Iteration failed: capture the failure (prefixed with every warning collected so far) and stop looping.
+            | Failure errs        -> failure <- Some (Failure (List.rev warningsRev @ errs))
+        match failure with
+        | Some f -> f
+        | None   -> Success ((), List.rev warningsRev)
+
+    /// <summary>Implements <c>for x in s do body</c> inside the CE by translating it into a <see cref="While"/> loop driven by the sequence's enumerator (itself disposed via <see cref="Using"/>).</summary>
+    /// <param name="s">The sequence to iterate over.</param>
+    /// <param name="body">The loop body, invoked once per element.</param>
+    /// <returns>The result of the equivalent <see cref="While"/> loop over the sequence's enumerator.</returns>
     member x.For(s:seq<_>, body) =
         x.Using(s.GetEnumerator(), fun enum ->
             x.While(enum.MoveNext,
                 x.Delay(fun () -> body enum.Current)))
 
+/// <summary>
+/// Module hosting the single, shared <see cref="ReturnsBuilder"/> instance used to enter the <c>returns { ... }</c> computation expression.
+/// </summary>
 [<AutoOpen>]
 module ReturnsBuilder =
     /// Wraps computations in an error handling computation expression.
@@ -990,5 +1258,4 @@ module ReturnsBuilder =
 
 // ****************************************************************************************************** //
 // ****************************************************************************************************** //
-
 
