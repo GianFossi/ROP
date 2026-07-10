@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write  # required so NuGet/login can request a GitHub OIDC token for Trusted Publishing
 
 jobs:
   publish:
@@ -53,12 +54,20 @@ jobs:
           path: nupkgs/*.nupkg
           retention-days: 90
 
+      # Trusted Publishing: exchanges this job's short-lived GitHub OIDC token for a temporary
+      # (~1 hour) NuGet API key, so no long-lived NUGET_API_KEY secret needs to be stored/rotated.
+      # Requires a Trusted Publishing policy configured at nuget.org (username -> Trusted Publishing)
+      # for Repository Owner "GianFossi", Repository "ROP", Workflow File "publish.yml".
+      - name: NuGet login (OIDC -> temp API key)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }} # your nuget.org profile/username, NOT your email address
+
       - name: Push to NuGet.org
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: >
           dotnet nuget push nupkgs/*.nupkg
-          --api-key "$NUGET_API_KEY"
+          --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
 

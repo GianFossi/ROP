@@ -32,13 +32,15 @@ To **build, test, or reference** this library you need:
 | **Git** | To clone the repository and (if publishing) to tag releases. |
 | An editor with F# support (optional, but recommended) | [VS Code](https://code.visualstudio.com/) + [Ionide](https://marketplace.visualstudio.com/items?itemName=Ionide.Ionide-fsharp), **Visual Studio 2022** (17.8+) with the *".NET desktop development"* workload, or **JetBrains Rider**. |
 
-To **publish a new version to NuGet.org** you additionally need:
+To **publish a new version to NuGet.org via the GitHub Actions workflow** (recommended path) you additionally need:
 
 | Requirement | Notes |
 | --- | --- |
-| A [nuget.org](https://www.nuget.org/) account | Used to generate an API key. |
-| A NuGet API key | Create one at nuget.org → your profile → *API Keys* → *Create*, scoped to the `Ganfoss.ROP` package (or "push new packages and package versions" while it doesn't exist yet). |
-| Push access to this GitHub repository | Needed to push a version tag that triggers the publish workflow, and to configure repository secrets. |
+| A [nuget.org](https://www.nuget.org/) account | Used to configure a Trusted Publishing policy — no API key needed for this path. |
+| A Trusted Publishing policy on nuget.org | See [Option A](#option-a--automated-via-github-actions-recommended) below for the exact fields. |
+| Push access to this GitHub repository | Needed to push a version tag that triggers the publish workflow, and to configure the `NUGET_USER` repository secret. |
+
+To **publish manually from the command line** instead (Option B below), you need a classic NuGet API key rather than Trusted Publishing: create one at nuget.org → your profile → *API Keys* → *Create*, scoped to the `Ganfoss.ROP` package (or "push new packages and package versions" while it doesn't exist yet).
 
 Verify your local setup with:
 
@@ -60,8 +62,8 @@ On a locked-down corporate machine, the following steps typically require **admi
 3. **Configure a corporate NuGet proxy/feed**, if the organization mandates one, by adding a `NuGet.Config` (solution-level or `%APPDATA%\NuGet\NuGet.Config`) pointing at the internal feed, with any required authentication (PAT, API key, or Windows auth).
 4. **(Optional) Install the IDE** — Visual Studio 2022 (with the F#/".NET desktop development" workload) or VS Code — both typically require admin rights to install machine-wide, though VS Code also offers a per-user installer that does not.
 5. **Grant the developer permission to set environment variables / repository secrets**, if the publish workflow is to be used:
-   - A machine/user environment variable (e.g. `NUGET_API_KEY`) if publishing manually from the command line.
-   - Or, for the CI publish workflow, a **GitHub repository secret** named `NUGET_API_KEY` (Settings → Secrets and variables → Actions → New repository secret) — this requires *admin/maintainer* rights on the GitHub repository, not on the PC itself.
+   - A machine/user environment variable (e.g. holding a classic API key) if publishing manually from the command line.
+   - Or, for the CI publish workflow (which uses Trusted Publishing, not a stored API key), a **GitHub repository secret** named `NUGET_USER` holding the nuget.org username (Settings → Secrets and variables → Actions → New repository secret) — this requires *admin/maintainer* rights on the GitHub repository, not on the PC itself.
 
 None of the day-to-day `dotnet build` / `dotnet test` / `dotnet pack` commands below require admin rights once the SDK is installed and network access is allowed.
 
@@ -388,12 +390,19 @@ dotnet run --project Test/Test.fsproj -- --filter "Returns - bind"
 
 ### Option A — Automated, via GitHub Actions (recommended)
 
-`.github/workflows/publish.yml` builds, tests, packs, and pushes the package whenever a tag matching `v*` is pushed, then also creates a GitHub Release with the `.nupkg` and a zipped DLL attached.
+`.github/workflows/publish.yml` builds, tests, packs, and pushes the package whenever a tag matching `v*` or `V*` is pushed, then also creates a GitHub Release with the `.nupkg` and a zipped DLL attached.
+
+Publishing to NuGet.org uses **[Trusted Publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing)** (OIDC) instead of a long-lived API key: the workflow exchanges a short-lived GitHub Actions token for a ~1-hour NuGet API key at push time via the [`NuGet/login`](https://github.com/NuGet/login) action, so there's no secret API key to store or rotate for this path.
 
 **One-time setup:**
 
-1. Generate an API key at [nuget.org](https://www.nuget.org/) → your account → *API Keys*.
-2. In the GitHub repository, go to **Settings → Secrets and variables → Actions → New repository secret**, name it `NUGET_API_KEY`, and paste the key. (Requires admin/maintainer rights on the repo — see [What the PC administrator has to do](#what-the-pc-administrator-has-to-do) if you don't have them.)
+1. Log into [nuget.org](https://www.nuget.org/) → click your username → **Trusted Publishing** → add a new policy with:
+   - **Repository Owner:** `GianFossi`
+   - **Repository:** `ROP`
+   - **Workflow File:** `publish.yml` (just the file name, not the `.github/workflows/` path)
+   - **Environment:** leave blank (this workflow doesn't use a GitHub Environment)
+2. In the GitHub repository, go to **Settings → Secrets and variables → Actions → New repository secret**, name it `NUGET_USER`, and set it to your nuget.org profile/username (**not** your email address). (Requires admin/maintainer rights on the repo — see [What the PC administrator has to do](#what-the-pc-administrator-has-to-do) if you don't have them.) This isn't a secret in the sensitive sense — it's just kept out of the workflow file so it isn't hardcoded in a public file.
+3. If the repository is private, a freshly created Trusted Publishing policy is only *temporarily* active for 7 days until the first successful publish confirms the repo/owner IDs — publish once within that window, or restart the 7-day window from the nuget.org UI.
 
 **Every release:**
 
@@ -408,10 +417,12 @@ Pushing the tag triggers the workflow, which:
 1. Restores, builds (`Release`), and runs the full test suite — the publish is aborted if any test fails.
 2. Extracts the version number from the tag (`v1.2.3` → `1.2.3`).
 3. Runs `dotnet pack ROP/ROP.fsproj -p:PackageVersion=1.2.3` to produce the `.nupkg`.
-4. Pushes it to `https://api.nuget.org/v3/index.json` with `--skip-duplicate`.
+4. Trades the job's GitHub OIDC token for a short-lived NuGet API key, then pushes to `https://api.nuget.org/v3/index.json` with `--skip-duplicate`.
 5. Publishes a GitHub Release for the tag with the `.nupkg` and a `ROP-1.2.3-dll.zip` (containing `ROP.dll` + `ROP.xml`) attached.
 
 ### Option B — Manual publish from your own PC
+
+Trusted Publishing currently only covers GitHub Actions — publishing from the command line still needs a classic API key from nuget.org (your account → *API Keys*).
 
 ```bash
 # 1. Build & test first
