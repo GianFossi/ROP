@@ -54,6 +54,13 @@ jobs:
           path: nupkgs/*.nupkg
           retention-days: 90
 
+      - name: Publish DLL (Release)
+        run: >
+          dotnet publish ROP/ROP.fsproj
+          --configuration Release
+          --no-build
+          --output publish
+
       # Trusted Publishing: exchanges this job's short-lived GitHub OIDC token for a temporary
       # (~1 hour) NuGet API key, so no long-lived NUGET_API_KEY secret needs to be stored/rotated.
       # Requires a Trusted Publishing policy configured at nuget.org (username -> Trusted Publishing)
@@ -74,8 +81,8 @@ jobs:
       - name: Zip DLL output
         run: >
           zip -j nupkgs/ROP-${{ steps.version.outputs.VERSION }}-dll.zip
-          ROP/bin/Release/net8.0/ROP.dll
-          ROP/bin/Release/net8.0/ROP.xml
+          publish/ROP.dll
+          publish/ROP.xml
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

@@ -13,6 +13,9 @@ dotnet run --project Test/Test.fsproj
 
 # Run tests matching a name fragment (Expecto --filter)
 dotnet run --project Test/Test.fsproj -- --filter "Returns - bind"
+
+# Publish the release DLL (optimized Release build, output to ./publish)
+dotnet publish ROP/ROP.fsproj --configuration Release --output ./publish
 ```
 
 ## Architecture

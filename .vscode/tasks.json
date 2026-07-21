@@ -18,7 +18,7 @@
             }
         },
         {
-            "label": "Publish",
+            "label": "Pack (NuGet)",
             "type": "process",
             "command": "dotnet",
             "args": [
@@ -28,6 +28,21 @@
                 "Release",
                 "--output",
                 "${workspaceFolder}/nupkgs"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": "build"
+        },
+        {
+            "label": "Publish (DLL)",
+            "type": "process",
+            "command": "dotnet",
+            "args": [
+                "publish",
+                "${workspaceFolder}/ROP/ROP.fsproj",
+                "--configuration",
+                "Release",
+                "--output",
+                "${workspaceFolder}/publish"
             ],
             "problemMatcher": "$msCompile",
             "group": "build"
