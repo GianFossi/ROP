@@ -8,19 +8,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build
 dotnet build ROP.sln
 
-# Run all tests
-dotnet run --project Test/Test.fsproj
+# Run all tests (once per target framework)
+dotnet run --project Test/Test.fsproj --framework net8.0
+dotnet run --project Test/Test.fsproj --framework net10.0
 
 # Run tests matching a name fragment (Expecto --filter)
-dotnet run --project Test/Test.fsproj -- --filter "Returns - bind"
+dotnet run --project Test/Test.fsproj --framework net8.0 -- --filter "Returns - bind"
 
-# Publish the release DLL (optimized Release build, output to ./publish)
-dotnet publish ROP/ROP.fsproj --configuration Release --output ./publish
+# Publish the release DLL (optimized Release build, output to ./publish/<tfm>)
+dotnet publish ROP/ROP.fsproj --configuration Release --framework net8.0 --output ./publish/net8.0
+dotnet publish ROP/ROP.fsproj --configuration Release --framework net10.0 --output ./publish/net10.0
 ```
+
+The library and test project multi-target `net8.0` (LTS) and `net10.0`, so commands that build for both (`dotnet build`) don't need `--framework`, but `dotnet run` and `dotnet publish` are ambiguous across multiple target frameworks and require `--framework net8.0` or `--framework net10.0` to pick one. `LangVersion` is pinned per target framework in the `.fsproj` files (`8.0` for `net8.0`, `10.0` for `net10.0`) so each build only uses language features available at that framework's release.
 
 ## Architecture
 
-An F# library (.NET 8) implementing Railway-Oriented Programming around a custom `Returns<'TSuccess,'TMessage>` type — richer than the standard `Result` type because it tracks warnings alongside the success value.
+An F# library (multi-targets .NET 8 LTS and .NET 10) implementing Railway-Oriented Programming around a custom `Returns<'TSuccess,'TMessage>` type — richer than the standard `Result` type because it tracks warnings alongside the success value.
 
 ### Core Type
 

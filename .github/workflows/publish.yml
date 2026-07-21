@@ -22,7 +22,9 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - name: Restore dependencies
         run: dotnet restore ROP.sln
@@ -30,8 +32,11 @@ jobs:
       - name: Build (Release)
         run: dotnet build ROP.sln --configuration Release --no-restore
 
-      - name: Run tests
-        run: dotnet run --project Test/Test.fsproj --configuration Release
+      - name: Run tests (net8.0)
+        run: dotnet run --project Test/Test.fsproj --configuration Release --framework net8.0
+
+      - name: Run tests (net10.0)
+        run: dotnet run --project Test/Test.fsproj --configuration Release --framework net10.0
 
       - name: Extract version from tag
         id: version
@@ -54,12 +59,21 @@ jobs:
           path: nupkgs/*.nupkg
           retention-days: 90
 
-      - name: Publish DLL (Release)
+      - name: Publish DLL (Release, net8.0)
         run: >
           dotnet publish ROP/ROP.fsproj
           --configuration Release
           --no-build
-          --output publish
+          --framework net8.0
+          --output publish/net8.0
+
+      - name: Publish DLL (Release, net10.0)
+        run: >
+          dotnet publish ROP/ROP.fsproj
+          --configuration Release
+          --no-build
+          --framework net10.0
+          --output publish/net10.0
 
       # Trusted Publishing: exchanges this job's short-lived GitHub OIDC token for a temporary
       # (~1 hour) NuGet API key, so no long-lived NUGET_API_KEY secret needs to be stored/rotated.
@@ -79,10 +93,12 @@ jobs:
           --skip-duplicate
 
       - name: Zip DLL output
+        # Preserves the net8.0/ and net10.0/ subfolders (no -j) since both contain
+        # a same-named ROP.dll/ROP.xml that would otherwise collide when flattened.
         run: >
-          zip -j nupkgs/ROP-${{ steps.version.outputs.VERSION }}-dll.zip
-          publish/ROP.dll
-          publish/ROP.xml
+          cd publish &&
+          zip -r ../nupkgs/ROP-${{ steps.version.outputs.VERSION }}-dll.zip
+          net8.0 net10.0
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

@@ -33,7 +33,7 @@
             "group": "build"
         },
         {
-            "label": "Publish (DLL)",
+            "label": "Publish (DLL net8.0)",
             "type": "process",
             "command": "dotnet",
             "args": [
@@ -41,10 +41,37 @@
                 "${workspaceFolder}/ROP/ROP.fsproj",
                 "--configuration",
                 "Release",
+                "--framework",
+                "net8.0",
                 "--output",
-                "${workspaceFolder}/publish"
+                "${workspaceFolder}/publish/net8.0"
             ],
             "problemMatcher": "$msCompile",
+            "group": "build"
+        },
+        {
+            "label": "Publish (DLL net10.0)",
+            "type": "process",
+            "command": "dotnet",
+            "args": [
+                "publish",
+                "${workspaceFolder}/ROP/ROP.fsproj",
+                "--configuration",
+                "Release",
+                "--framework",
+                "net10.0",
+                "--output",
+                "${workspaceFolder}/publish/net10.0"
+            ],
+            "problemMatcher": "$msCompile",
+            "group": "build"
+        },
+        {
+            "label": "Publish (DLL, both frameworks)",
+            "dependsOn": [
+                "Publish (DLL net8.0)",
+                "Publish (DLL net10.0)"
+            ],
             "group": "build"
         },
         {

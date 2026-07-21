@@ -1,7 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Library</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <LangVersion Condition="'$(TargetFramework)' == 'net8.0'">8.0</LangVersion>
+    <LangVersion Condition="'$(TargetFramework)' == 'net10.0'">10.0</LangVersion>
     <Authors>Gian-Luca ANFOSSI</Authors>
     <Company>Ganfoss</Company>
     <PackageId>Ganfoss.ROP</PackageId>

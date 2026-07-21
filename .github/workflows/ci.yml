@@ -21,7 +21,9 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - name: Restore dependencies
         run: dotnet restore ROP.sln
@@ -29,15 +31,27 @@ jobs:
       - name: Build (Release)
         run: dotnet build ROP.sln --configuration Release --no-restore
 
-      - name: Run tests
-        run: dotnet run --project Test/Test.fsproj --configuration Release
+      - name: Run tests (net8.0)
+        run: dotnet run --project Test/Test.fsproj --configuration Release --framework net8.0
 
-      - name: Publish DLL (Release)
+      - name: Run tests (net10.0)
+        run: dotnet run --project Test/Test.fsproj --configuration Release --framework net10.0
+
+      - name: Publish DLL (Release, net8.0)
         run: >
           dotnet publish ROP/ROP.fsproj
           --configuration Release
           --no-build
-          --output publish
+          --framework net8.0
+          --output publish/net8.0
+
+      - name: Publish DLL (Release, net10.0)
+        run: >
+          dotnet publish ROP/ROP.fsproj
+          --configuration Release
+          --no-build
+          --framework net10.0
+          --output publish/net10.0
 
       - name: Upload DLL artifact
         uses: actions/upload-artifact@v7
