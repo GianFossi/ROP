@@ -122,6 +122,38 @@ module Returns =
         | Success (value, msgs) when predicate value -> Success (value, msgs @ [message])
         | _ -> returns
 
+    /// <summary>
+    /// Lazy-message variant of <see cref="warnIf"/>: appends a warning to the current Success value if the
+    /// predicate holds, invoking the supplied thunk to build the message only when needed. Failures and
+    /// non-matching Successes are propagated unchanged and the thunk is not evaluated.
+    /// </summary>
+    /// <param name="predicate">Condition evaluated against the current Success value.</param>
+    /// <param name="buildMessage">Thunk that produces the warning message; invoked only when <paramref name="predicate"/> returns true.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The input with the built message appended to its warnings when the predicate matches; otherwise the input unchanged.</returns>
+    let warnIfLazy (predicate: 'TSuccess -> bool) (buildMessage: unit -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        // The thunk fires only inside this guarded branch, so callers pay the allocation/formatting cost
+        // exclusively when the predicate matches.
+        | Success (value, msgs) when predicate value -> Success (value, msgs @ [buildMessage ()])
+        | _ -> returns
+
+    /// <summary>
+    /// Value-aware variant of <see cref="warnIf"/>: appends a warning to the current Success value if the
+    /// predicate holds, passing the Success value to the message-building function. Failures and
+    /// non-matching Successes are propagated unchanged and <paramref name="buildMessage"/> is not invoked.
+    /// </summary>
+    /// <param name="predicate">Condition evaluated against the current Success value.</param>
+    /// <param name="buildMessage">Function that receives the Success value and produces the warning message; invoked only when <paramref name="predicate"/> returns true.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The input with the built message appended to its warnings when the predicate matches; otherwise the input unchanged.</returns>
+    let warnIfWith (predicate: 'TSuccess -> bool) (buildMessage: 'TSuccess -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        // buildMessage receives the offending value directly, so messages can reference it without the
+        // caller having to close over it via a let binding.
+        | Success (value, msgs) when predicate value -> Success (value, msgs @ [buildMessage value])
+        | _ -> returns
+
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
