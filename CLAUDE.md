@@ -41,7 +41,10 @@ An F# library (multi-targets .NET 8 LTS and .NET 10) implementing Railway-Orient
   - *Sequential* (short-circuit on first failure): `>>=` (bind), `>=>` / `<=<` (Kleisli)
   - *Applicative*: `<!>` (map), `<*>` (apply)
   - *Parallel* (accumulate all failures): `&&&`, `validateAll`
-  - *Collection*: `traverseList`, `sequenceList`, `partition`, `fold`
+  - *Collection*: `traverseList`/`traverseArray` (accumulate all failures), `traverseListFailFast`/`traverseArrayFailFast` (stop at the first), `sequenceList`, `partition`, `fold`
+  - *Warnings/context*: `warnIfLazy`, `dedupeWarnings`, `summariseWarnings`, `withContextBy`
+
+- **`Testing.fs`** — `ROP.Testing`: framework-agnostic assertions for tests (`getOrFail`, `expectFailure`, `expectNoWarnings`, ...); failures raise a plain exception rendering every message.
 
 - **`Validation.fs`** — a higher-level DSL for record/property validation. Entry point: `createValidatorFor<'T>()`. Provides combinators like `validate`, `validateWhen`, `validateRequired`, and primitive checks (`isGreaterThan`, `isNotEmpty`, `isNotEmptyOrWhitespace`).
 

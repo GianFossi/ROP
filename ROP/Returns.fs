@@ -371,6 +371,38 @@ module Returns =
         | Result.Ok (value, warns) -> Success (value, warns)
         | Result.Error errors -> failmany errors
 
+    /// <summary>
+    /// Converts a plain (warning-less, single-error) <c>Result&lt;'TSuccess,'TMessage&gt;</c> into a <c>Returns</c> (result) container.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="ofResult"/>, the Ok case carries just the value (no warning list), which is the shape
+    /// every non-ROP API produces. If the Error payload is already a list (<c>Result&lt;'T,'M list&gt;</c>), this
+    /// would yield a <c>Returns&lt;'T,'M list&gt;</c> with a single list-valued error; use <see cref="ofResult"/>
+    /// (after <c>Result.map (fun v -> v, [])</c>) for that shape instead.
+    /// </remarks>
+    /// <param name="result">The input plain Result.</param>
+    /// <returns>A warning-free Success of the Ok value, or a single-error Failure of the Error value.</returns>
+    let ofPlainResult (result: Result<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match result with
+        | Result.Ok value -> Success (value, [])
+        | Result.Error error -> Failure [ error ]
+
+    /// <summary>
+    /// Converts a <c>Returns</c> (result) container into a plain <c>Result&lt;'TSuccess,'TMessage list&gt;</c>.
+    /// WARNINGS ARE DISCARDED: a Success with warnings becomes an <c>Ok</c> of the bare value.
+    /// </summary>
+    /// <remarks>
+    /// This is a lossy boundary conversion, intended for handing a value to code that does not understand the
+    /// warning channel. If the warnings matter, either use <see cref="toResult"/> (which keeps them in the Ok
+    /// payload), or escalate them first with <see cref="failOnWarnings"/>, or log them with <see cref="successTee"/>.
+    /// </remarks>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns><c>Ok value</c> for a Success (warnings dropped); <c>Error errors</c> for a Failure.</returns>
+    let toPlainResult (returns: Returns<'TSuccess,'TMessage>) : Result<'TSuccess,'TMessage list> =
+        match returns with
+        | Success (value, _) -> Result.Ok value
+        | Failure errors -> Result.Error errors
+
     // -------------------------------------------------------------------------------------- //
 
     // ********************
@@ -415,9 +447,12 @@ module Returns =
         // Note the append order: the returns' OWN messages come first, then the supplied "messages" - this
         // is what gives `bind` its documented (and test-covered) "newest step's messages first" ordering
         // when composed in a chain, since each step's own result becomes the "messages" side of the next call.
-        let fSuccess (x, msgs) = Success(x, msgs @ messages)
-        let fFailure errs = Failure(errs @ messages)
-        either fSuccess fFailure returns
+        // Matched directly rather than through `either` with local lambdas, which allocated closures on every call.
+        match messages, returns with
+        // Nothing to append: the result would be structurally identical to the input, so skip re-wrapping it.
+        | [], _                -> returns
+        | _, Success (x, msgs) -> Success(x, msgs @ messages)
+        | _, Failure errs      -> Failure(errs @ messages)
 
     /// <summary>
     /// Takes an input <c>Returns</c> (result) container, and:
@@ -454,9 +489,12 @@ module Returns =
     let inline bind (switchFunction : 'TSuccess1 -> Returns<'TSuccess2,'TMessage> ) (returns : Returns<'TSuccess1,'TMessage>) =
         // On Success, run the next step and fold this step's warnings into its result (see jointMessages
         // for the resulting message ordering); on Failure, short-circuit and propagate the errors as-is.
-        let fSuccess (s, msgs) = switchFunction  s |> jointMessages msgs
-        let fFailure (msgs) = Failure msgs
-        either fSuccess fFailure returns
+        // Matched directly rather than through `either` with local lambdas, which allocated closures on every call
+        // (bind sits on the hottest path of any pipeline); jointMessages returns the step's result as-is when there
+        // are no warnings to fold in.
+        match returns with
+        | Success (s, msgs) -> switchFunction s |> jointMessages msgs
+        | Failure msgs      -> Failure msgs
 
     // -------------------------------------------------------------------------------------- //
 
@@ -551,6 +589,81 @@ module Returns =
         match returns with
         | Success _        -> returns
         | Failure errors   -> Failure (errors |> List.map f)
+
+    // -------------------------------------------------------------------------------------- //
+
+    // ********************
+    // **  AGGREGATION  ***
+    // ********************
+
+    /// <summary>
+    /// Removes duplicate warnings from a Success, keeping the first occurrence of each and preserving the order of the
+    /// warnings that remain. Failures are propagated unchanged.
+    /// </summary>
+    /// <remarks>
+    /// Loops (marching solvers, per-element traversals) tend to raise the same warning once per iteration, which
+    /// buries everything else in the report; the usual workaround, dropping warnings upstream, defeats the warning
+    /// channel entirely. Use <see cref="summariseWarnings"/> instead when the number of occurrences matters.
+    /// </remarks>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>A Success with duplicate warnings removed (first-occurrence order kept), or the original Failure untouched.</returns>
+    let dedupeWarnings (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        // List.distinct keeps the first occurrence of each element and discards later ones, in list order.
+        | Success (value, msgs) -> Success (value, List.distinct msgs)
+        | Failure _             -> returns
+
+    /// <summary>
+    /// Collapses the warnings of a Success by a key, returning each distinct warning (the first one seen for its key)
+    /// together with the number of warnings that shared that key, in first-occurrence order.
+    /// Error messages of a Failure are NOT collapsed: each is carried through with a count of 1.
+    /// </summary>
+    /// <remarks>
+    /// Keeps the information "this happened 100 times" that <see cref="dedupeWarnings"/> throws away. The key lets
+    /// warnings that differ only in a payload (e.g. the node index they were raised at) be grouped together; pass
+    /// <c>id</c> to group only identical warnings.
+    /// </remarks>
+    /// <param name="key">Projects each warning to the key it is grouped by.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>A Success whose warnings are (first warning, count) pairs, one per distinct key; or a Failure whose errors are each paired with 1.</returns>
+    let summariseWarnings (key: 'TMessage -> 'Key) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage * int> =
+        match returns with
+        | Success (value, msgs) ->
+            // List.groupBy yields groups in first-occurrence order of their key, each group keeping list order,
+            // so the head of each group is the first warning seen for that key.
+            let summary = msgs |> List.groupBy key |> List.map (fun (_, group) -> List.head group, List.length group)
+            Success (value, summary)
+        | Failure errors -> Failure (errors |> List.map (fun e -> e, 1))
+
+    // -------------------------------------------------------------------------------------- //
+
+    // ********************
+    // **    CONTEXT    ***
+    // ********************
+
+    /// <summary>
+    /// Annotates every error message of a Failure with a context label, using a caller-supplied annotation function,
+    /// so that nested calls build a breadcrumb trail of where the failure travelled. Successes (and their warnings)
+    /// are propagated unchanged.
+    /// </summary>
+    /// <remarks>
+    /// <para>Because <c>'TMessage</c> is generic, the library cannot know how to attach a label to a message, so the
+    /// caller provides that once (e.g. <c>fun ctx m -> InContext (ctx, m)</c> for a union, or
+    /// <c>fun ctx m -> $"{ctx}: {m}"</c> for strings). Partially apply it to get a project-wide <c>withContext</c>:
+    /// <c>let withContext label = Returns.withContextBy MyMessage.inContext label</c>.</para>
+    /// <para>Applied at several levels, the innermost label is applied first, so the outermost label ends up
+    /// outermost in the message. Note that a Failure produced by <c>bind</c>/<c>&gt;&gt;=</c> also carries the
+    /// warnings collected before it, and those are annotated too. To annotate warnings as well, pipe through
+    /// <c>Returns.mapWarnings (annotate label)</c>.</para>
+    /// </remarks>
+    /// <param name="annotate">Attaches the context to a single message.</param>
+    /// <param name="context">The context label (typically a string naming the current step).</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The Failure with every error annotated, or the original Success untouched.</returns>
+    let withContextBy (annotate: 'Context -> 'TMessage -> 'TMessage) (context: 'Context) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success _      -> returns
+        | Failure errors -> Failure (errors |> List.map (annotate context))
 
     // -------------------------------------------------------------------------------------- //
 
@@ -943,8 +1056,13 @@ module Returns =
 
     /// <summary>
     /// Maps each element of a list through a switch function and collects results into a single Returns.
-    /// All errors are accumulated: if any element fails, failures from every failing element are merged.
+    /// ACCUMULATES ALL FAILURES (applicative semantics, does NOT stop at the first failure): the switch function runs
+    /// on every element, and if any element fails, the errors of every failing element are merged, in order.
     /// </summary>
+    /// <remarks>
+    /// This is the right choice for validation (every defect reported in one pass). When later elements are
+    /// expensive or meaningless once one has failed, use <see cref="traverseListFailFast"/> instead.
+    /// </remarks>
     /// <param name="switchFunction">The function applied to each input element, producing a <c>Returns</c> per element.</param>
     /// <param name="inputs">The list of values to map and combine.</param>
     /// <returns>A Success of the list of mapped values (all warnings merged, in order) if every element succeeded; otherwise a Failure with every accumulated error, in order.</returns>
@@ -976,6 +1094,89 @@ module Returns =
     let sequenceList (returns: Returns<'TSuccess,'TMessage> list) : Returns<'TSuccess list,'TMessage> =
         // No per-element transformation needed - traversing with `id` is exactly "sequence".
         traverseList id returns
+
+    /// <summary>
+    /// Maps each element of a list through a switch function and collects results into a single Returns,
+    /// STOPPING AT THE FIRST FAILURE (sequential semantics, like chaining with <c>&gt;&gt;=</c>): the switch function
+    /// is not invoked on any element after the first failing one.
+    /// </summary>
+    /// <remarks>
+    /// The sequential counterpart of <see cref="traverseList"/>, for computations where continuing past a failure is
+    /// wasted work. Do not use it for validation: callers would see one defect at a time. As with a <c>for</c> loop
+    /// inside <c>returns { }</c>, the warnings collected before the failure are kept: the Failure carries them (in
+    /// element order) followed by the errors of the failing element.
+    /// </remarks>
+    /// <param name="switchFunction">The function applied to each input element, producing a <c>Returns</c> per element.</param>
+    /// <param name="inputs">The list of values to map and combine.</param>
+    /// <returns>A Success of the list of mapped values (all warnings merged, in order) if every element succeeded; otherwise a Failure with the earlier warnings followed by the first failing element's errors.</returns>
+    let traverseListFailFast (switchFunction: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>) (inputs: 'TSuccess1 list) : Returns<'TSuccess2 list,'TMessage> =
+        // Accumulate values and warnings in reverse (cheap prepend), then reverse once at the end.
+        let revAppend xs ys = List.fold (fun acc x -> x :: acc) ys xs
+        let rec loop valuesRev msgsRev remaining =
+            match remaining with
+            | [] -> Success (List.rev valuesRev, List.rev msgsRev)
+            | x :: rest ->
+                match switchFunction x with
+                | Success (v, msgs) -> loop (v :: valuesRev) (revAppend msgs msgsRev) rest
+                // Short-circuit: the rest of the list is never visited.
+                | Failure errs      -> Failure (List.rev msgsRev @ errs)
+        loop [] [] inputs
+
+    /// <summary>
+    /// Array counterpart of <see cref="traverseList"/>: maps each element through a switch function and collects the
+    /// results into a single Returns of an array. ACCUMULATES ALL FAILURES (does NOT stop at the first failure).
+    /// </summary>
+    /// <remarks>
+    /// Writes the mapped values straight into a pre-sized result array, avoiding the intermediate (reversed) value
+    /// list that <c>traverseList</c> builds and then reverses; worthwhile on hot paths and large inputs. Each call to
+    /// the switch function still allocates its own <c>Returns</c>.
+    /// </remarks>
+    /// <param name="switchFunction">The function applied to each input element, producing a <c>Returns</c> per element.</param>
+    /// <param name="inputs">The array of values to map and combine.</param>
+    /// <returns>A Success of the array of mapped values (all warnings merged, in order) if every element succeeded; otherwise a Failure with every accumulated error, in order.</returns>
+    let traverseArray (switchFunction: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>) (inputs: 'TSuccess1 array) : Returns<'TSuccess2 array,'TMessage> =
+        let revAppend xs ys = List.fold (fun acc x -> x :: acc) ys xs
+        let values : 'TSuccess2 array = Array.zeroCreate inputs.Length
+        let mutable msgsRev = []
+        let mutable errsRev = []
+        for i in 0 .. inputs.Length - 1 do
+            match switchFunction inputs.[i] with
+            | Success (v, msgs) ->
+                values.[i] <- v
+                msgsRev <- revAppend msgs msgsRev
+            // Keep going after a failure, so that every failing element contributes its errors.
+            | Failure errs -> errsRev <- revAppend errs errsRev
+        match errsRev with
+        | [] -> Success (values, List.rev msgsRev)
+        | _  -> Failure (List.rev errsRev)
+
+    /// <summary>
+    /// Array counterpart of <see cref="traverseListFailFast"/>: maps each element through a switch function and
+    /// collects the results into a single Returns of an array, STOPPING AT THE FIRST FAILURE.
+    /// </summary>
+    /// <remarks>
+    /// Same semantics as <c>traverseListFailFast</c> (earlier warnings are kept, followed by the failing element's
+    /// errors); same allocation advantage as <see cref="traverseArray"/>. Do not use it for validation.
+    /// </remarks>
+    /// <param name="switchFunction">The function applied to each input element, producing a <c>Returns</c> per element.</param>
+    /// <param name="inputs">The array of values to map and combine.</param>
+    /// <returns>A Success of the array of mapped values (all warnings merged, in order) if every element succeeded; otherwise a Failure with the earlier warnings followed by the first failing element's errors.</returns>
+    let traverseArrayFailFast (switchFunction: 'TSuccess1 -> Returns<'TSuccess2,'TMessage>) (inputs: 'TSuccess1 array) : Returns<'TSuccess2 array,'TMessage> =
+        let revAppend xs ys = List.fold (fun acc x -> x :: acc) ys xs
+        let values : 'TSuccess2 array = Array.zeroCreate inputs.Length
+        let mutable msgsRev = []
+        let mutable failure = None
+        let mutable i = 0
+        while failure.IsNone && i < inputs.Length do
+            match switchFunction inputs.[i] with
+            | Success (v, msgs) ->
+                values.[i] <- v
+                msgsRev <- revAppend msgs msgsRev
+            | Failure errs -> failure <- Some (Failure (List.rev msgsRev @ errs))
+            i <- i + 1
+        match failure with
+        | Some f -> f
+        | None   -> Success (values, List.rev msgsRev)
 
     // -------------------------------------------------------------------------------------- //
 
