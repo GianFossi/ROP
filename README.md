@@ -287,8 +287,11 @@ let checkIsLargerThan10 (x:int) =
 Returns.ok 9 >>= checkIsEven >>= checkIsNegative >>= checkIsLargerThan10
 // Success (9, [IsOdd])
 
-Returns.ok -20 >>= checkIsEven >>= checkIsNegative >>= checkIsLargerThan10
+Returns.ok -11 >>= checkIsEven >>= checkIsNegative >>= checkIsLargerThan10
 // Failure [IsNegativeValue; IsOdd]   <-- warnings collected so far are kept even on failure
+
+Returns.ok -20 >>= checkIsEven >>= checkIsNegative >>= checkIsLargerThan10
+// Failure [IsEven]                   <-- -20 is even: the first check fails and the rest never runs
 
 // Or compose the switch functions themselves (point-free, "Kleisli" composition):
 let pipeline = checkIsEven >=> checkIsNegative >=> checkIsLargerThan10
