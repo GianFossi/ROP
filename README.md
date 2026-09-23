@@ -22,13 +22,27 @@ This repository contains an F# library that implements a Railway-Oriented Progra
 
 ---
 
+## What's new in 1.1.0
+
+This release only adds; code written against 1.0.x compiles unchanged.
+
+- `warnIfLazy` builds the warning message only when the predicate holds.
+- `ROP.Testing` provides test assertions that work with any test framework.
+- `dedupeWarnings` and `summariseWarnings` collapse repeated warnings.
+- `traverseListFailFast`, `traverseArray` and `traverseArrayFailFast` complement `traverseList`, which accumulates every failure.
+- `withContextBy` builds breadcrumb trails on failures.
+- `ofPlainResult` and `toPlainResult` convert to and from plain `Result`.
+- `bind` and `>>=` allocate about 4× less per step (see [Zero-allocation paths](#zero-allocation-paths)).
+
+---
+
 ## Prerequisites
 
 To **build, test, or reference** this library you need:
 
 | Requirement | Notes |
 | --- | --- |
-| **.NET 8 SDK** (`8.0.x`) | The library targets `net8.0`. F# tooling (`dotnet fsi`, the F# compiler) ships bundled with the .NET SDK — no separate install is required. |
+| **.NET 10 SDK** (`10.0.x`), plus the **.NET 8 runtime** | The library multi-targets `net8.0` (LTS) and `net10.0`. The .NET 10 SDK builds both, and running the `net8.0` tests needs the .NET 8 runtime (or install both SDKs). F# tooling (`dotnet fsi`, the F# compiler) ships bundled with the .NET SDK — no separate install is required. |
 | **Git** | To clone the repository and (if publishing) to tag releases. |
 | An editor with F# support (optional, but recommended) | [VS Code](https://code.visualstudio.com/) + [Ionide](https://marketplace.visualstudio.com/items?itemName=Ionide.Ionide-fsharp), **Visual Studio 2022** (17.8+) with the *".NET desktop development"* workload, or **JetBrains Rider**. |
 
@@ -45,16 +59,17 @@ To **publish manually from the command line** instead (Option B below), you need
 Verify your local setup with:
 
 ```bash
-dotnet --version   # should print 8.0.x (or a compatible 8.x SDK)
+dotnet --version        # should print 10.0.x
 dotnet --list-sdks
+dotnet --list-runtimes  # should include Microsoft.NETCore.App 8.0.x and 10.0.x
 ```
 
 ### What the PC administrator has to do
 
 On a locked-down corporate machine, the following steps typically require **administrator/elevated rights** and should be done once per machine:
 
-1. **Install the .NET 8 SDK.**
-   - Windows: `winget install Microsoft.DotNet.SDK.8` (or the MSI installer from [dotnet.microsoft.com](https://dotnet.microsoft.com/download/dotnet/8.0)). The installer writes to `Program Files` and registers the SDK machine-wide, which needs admin rights.
+1. **Install the .NET 10 SDK and the .NET 8 runtime.**
+   - Windows: `winget install Microsoft.DotNet.SDK.10` and `winget install Microsoft.DotNet.Runtime.8` (or the MSI installers from [dotnet.microsoft.com](https://dotnet.microsoft.com/download)). The installer writes to `Program Files` and registers the SDK machine-wide, which needs admin rights.
    - The installer also adds `dotnet` to the **system** `PATH`; a user-level install (`dotnet-install.ps1 -InstallDir <user folder>`) is possible without admin rights but then `PATH` must be adjusted per user.
 2. **Allow outbound HTTPS access** (through the corporate firewall / proxy) to:
    - `api.nuget.org` and `www.nuget.org` — required for `dotnet restore` and for publishing packages.
@@ -90,7 +105,7 @@ This library follows a small number of deliberate design principles — understa
 ## Technology stack
 
 - **Language**: F#
-- **Runtime**: .NET 8 (`TargetFramework: net8.0`)
+- **Runtime**: .NET 8 LTS and .NET 10 (`TargetFrameworks: net8.0;net10.0`; `LangVersion` pinned per framework)
 - **Library project**: `ROP/ROP.fsproj` (NuGet package id `Ganfoss.ROP`)
 - **Tests**: Expecto (`Test/Test.fsproj`)
 - **Solution**: `ROP.sln`
@@ -183,7 +198,7 @@ expectNoWarnings r                          // value, if a Success with no warni
 
 #### Hot paths
 
-Code that must not allocate per evaluation (per node, per iteration) should not use `Returns`. Use struct state with a flags enum there, and convert to `Returns` once per solve. See [docs/ZERO-ALLOC.md](docs/ZERO-ALLOC.md) for measured costs, the reasoning against a struct variant, and the boundary pattern.
+See [Zero-allocation paths](#zero-allocation-paths) below.
 
 ---
 
@@ -388,6 +403,48 @@ More end-to-end scenarios (including a realistic domain example with layered, re
 
 ---
 
+## Zero-allocation paths
+
+The full design note is [docs/ZERO-ALLOC.md](docs/ZERO-ALLOC.md). In short:
+
+**Decision:** there is no `[<Struct>]` variant of `Returns`. Code that must not allocate per evaluation (per node, per iteration, per integration point) does not use ROP. It uses plain struct values and a `[<Flags>]` diagnostics enum, and converts to `Returns` **once**, at the edge (per solve or request).
+
+**Why not a struct variant.** A struct prototype allocates nothing on the clean path, but:
+
+- every warning still allocates a list cell and usually the message too;
+- making warnings allocation-free means a flags enum, which is what the kernels already have;
+- the whole API (operators, CE, traversals, `Validation`) would have to be duplicated.
+
+**What `Returns` costs**, in bytes allocated per call, measured with `Bench/AllocProbe`:
+
+| Scenario | v1.0.2 net8.0 | v1.0.2 net10.0 | v1.1.0 net8.0 | v1.1.0 net10.0 |
+| --- | ---: | ---: | ---: | ---: |
+| `Returns.ok x` | 32 B | 32 B | 32 B | 32 B |
+| `ok x >>= s >>= s >>= s`, no warnings | 560 B | 408 B | **128 B** | **128 B** |
+| `returns { let! … ×3 }`, no warnings | 448 B | 349 B | **160 B** | **160 B** |
+| `warnIf` (false) vs `warnIfLazy` (false), interpolated message | 312 B | 312 B | 312 B → **32 B** | 312 B → **32 B** |
+
+Since v1.1.0, a clean pipeline costs one `Success` (32 B) per step on both runtimes. That is the minimum for a reference-type union.
+
+**The boundary:**
+
+| Layer | Runs | Uses |
+| --- | --- | --- |
+| Kernel | per node / iteration | struct state + flags enum, combined with `\|\|\|`; **no `Returns`** |
+| Edge | once per solve / request | decode flags into `Returns.warnmany` / `Returns.fail`, then ordinary ROP upstream |
+| Warm paths | per solve | `Returns` freely; prefer `warnIfLazy`, `traverseArray*`, and `dedupeWarnings`/`summariseWarnings` before reporting |
+
+Combining flags with `|||` also removes duplicate warnings for free: 100 out-of-range nodes set the same bit once. The design note has a worked example of the kernel/edge split.
+
+To reproduce the figures:
+
+```bash
+dotnet run -c Release --project Bench/AllocProbe --framework net8.0
+dotnet run -c Release --project Bench/AllocProbe --framework net10.0
+```
+
+---
+
 ## Test organization
 
 Tests are in `Test/Program.fs` and grouped by behavior:
@@ -410,11 +467,13 @@ From the repository root:
 # Build the whole solution
 dotnet build ROP.sln
 
-# Run the Expecto test suite
-dotnet run --project Test/Test.fsproj
+# Run the Expecto test suite, once per target framework
+# (dotnet run needs --framework because the project multi-targets)
+dotnet run --project Test/Test.fsproj --framework net8.0
+dotnet run --project Test/Test.fsproj --framework net10.0
 
 # Run only tests whose name contains a given fragment
-dotnet run --project Test/Test.fsproj -- --filter "Returns - bind"
+dotnet run --project Test/Test.fsproj --framework net8.0 -- --filter "Returns - bind"
 ```
 
 ---
@@ -460,7 +519,8 @@ Trusted Publishing currently only covers GitHub Actions — publishing from the 
 ```bash
 # 1. Build & test first
 dotnet build ROP.sln --configuration Release
-dotnet run --project Test/Test.fsproj --configuration Release
+dotnet run --project Test/Test.fsproj --configuration Release --framework net8.0
+dotnet run --project Test/Test.fsproj --configuration Release --framework net10.0
 
 # 2. Pack, specifying the version explicitly (-p:PackageVersion overrides the
 #    <Version> in the .fsproj, which is only the fallback for local packs)

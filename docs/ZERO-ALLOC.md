@@ -4,21 +4,23 @@
 
 ## What `Returns` actually costs
 
-Measured with [`Bench/AllocProbe`](../Bench/AllocProbe/Program.fs) (`dotnet run -c Release --project Bench/AllocProbe`, net8.0, bytes allocated per call averaged over 5M calls after warm-up):
+Measured with [`Bench/AllocProbe`](../Bench/AllocProbe/Program.fs), in bytes allocated per call, averaged over 5M calls after warm-up. To reproduce, run `dotnet run -c Release --project Bench/AllocProbe --framework net8.0` (or `net10.0`):
 
-| Scenario | v1.0.2 | v1.1.0 |
-| --- | ---: | ---: |
-| Plain `float` arithmetic (baseline) | 0 B | 0 B |
-| `Returns.ok x` | 32 B | 32 B |
-| `ok x >>= s >>= s >>= s`, no warnings | 560 B | **128 B** |
-| `returns { let! … ×3 }`, no warnings | 448 B | **160 B** |
-| 3 steps, each adding one warning | 816 B | **448 B** |
-| `warnIf` (false) with an interpolated message | 312 B | 312 B |
-| `warnIfLazy` (false), same message | n/a | **32 B** |
-| *Prototype* struct variant, 3 binds, no warnings | n/a | 0 B |
-| *Prototype* struct variant, one warning | n/a | 64 B |
+| Scenario | v1.0.2 net8.0 | v1.0.2 net10.0 | v1.1.0 net8.0 | v1.1.0 net10.0 |
+| --- | ---: | ---: | ---: | ---: |
+| Plain `float` arithmetic (baseline) | 0 B | 0 B | 0 B | 0 B |
+| `Returns.ok x` | 32 B | 32 B | 32 B | 32 B |
+| `ok x >>= s >>= s >>= s`, no warnings | 560 B | 408 B | **128 B** | **128 B** |
+| `returns { let! … ×3 }`, no warnings | 448 B | 349 B | **160 B** | **160 B** |
+| 3 steps, each adding one warning | 816 B | 662 B | **448 B** | **448 B** |
+| `warnIf` (false) with an interpolated message | 312 B | 312 B | 312 B | 312 B |
+| `warnIfLazy` (false), same message | n/a | n/a | **32 B** | **32 B** |
+| *Prototype* struct variant, 3 binds, no warnings | 0 B | 0 B | 0 B | 0 B |
+| *Prototype* struct variant, one warning | 64 B | 64 B | 64 B | 64 B |
 
-The v1.1.0 figures include a fix to `bind`/`jointMessages`, which previously allocated closures on every call and re-wrapped results that had no warnings to merge. Semantics are unchanged, and the whole existing test suite still passes. A clean pipeline now costs exactly one `Success` object (32 B) per step. That is the minimum for a reference-type union.
+The v1.1.0 figures include a fix to `bind`/`jointMessages`. Before it, both allocated closures on every call, and `jointMessages` re-wrapped results that had no warnings to merge. Semantics are unchanged, and the whole existing test suite still passes. With the fix, a clean pipeline costs exactly one `Success` object (32 B) per step on both runtimes. That is the minimum for a reference-type union.
+
+The fractional v1.0.2 figures on net10.0 come from the .NET 10 JIT, which removes some of those closures itself, but only sometimes. After the fix, the result no longer depends on what the JIT happens to do.
 
 ## Is a struct variant viable?
 
