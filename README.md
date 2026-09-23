@@ -415,7 +415,215 @@ let combined =
 Option.either (fun x -> string x) (fun () -> "none") (Some 42)   // "42"
 ```
 
-More end-to-end scenarios (including a realistic domain example with layered, remapped error messages) live in `ROP/Examples.Returns.HeatExchanger.fsx`.
+### 8. Post-conditions and recovery (`filter`, `filterWith`, `recover`)
+
+`filter` turns a Success into a Failure when a check on its value fails. As with a failing `>>=` step, the warnings raised so far are kept, after the error. `filterWith` builds the error message from the value, and only when the check fails. `recover` goes the other way: it replaces a Failure with a fallback, and the fallback can say that it is one.
+
+```fsharp
+open ROP
+
+let pressureDrop (flow: float) : Returns<float,string> =
+    if flow <= 0.0 then Returns.fail "flow must be positive"
+    else
+        Returns.ok (0.8 * flow * flow)
+        |> Returns.warnIfLazy (fun dp -> dp > 50.0) (fun () -> "high pressure drop")
+
+let checkedDrop flow =
+    pressureDrop flow
+    |> Returns.filterWith (fun dp -> dp <= 100.0) (fun dp -> sprintf "pressure drop %.1f bar exceeds 100 bar" dp)
+
+checkedDrop 5.0    // Success (20.0, [])
+checkedDrop 9.0    // Success (64.8, ["high pressure drop"])
+checkedDrop 12.0   // Failure ["pressure drop 115.2 bar exceeds 100 bar"; "high pressure drop"]
+
+let readSensor (id: string) : Returns<float,string> =
+    if id = "T2" then Returns.fail "sensor T2 offline" else Returns.ok 81.5
+
+let temperature id =
+    readSensor id
+    |> Returns.recover (fun errs -> Returns.warn ("using design value 80.0: " + String.concat "; " errs) 80.0)
+
+temperature "T1"   // Success (81.5, [])
+temperature "T2"   // Success (80.0, ["using design value 80.0: sensor T2 offline"])
+```
+
+Unlike `defaultValue`, which leaves the railway with a bare value, `recover` keeps the substitution visible to everything downstream.
+
+### 9. Where did it fail? Breadcrumbs with `withContextBy`
+
+`'TMessage` is generic, so the library can't prefix a label to it by itself. You say once how a context wraps a message, and every failure that passes through a labelled step gets wrapped:
+
+```fsharp
+open ROP
+
+type Msg =
+    | OutOfRange of quantity: string * value: float
+    | InContext of context: string * inner: Msg
+
+// Defined once per project.
+let withContext context r = Returns.withContextBy (fun ctx m -> InContext (ctx, m)) context r
+
+let nusselt (node: int) (re: float) : Returns<float,Msg> =
+    (if re < 2300.0 then Returns.fail (OutOfRange ("Re", re)) else Returns.ok (0.023 * re ** 0.8))
+    |> withContext $"node {node}"
+
+let march (reynolds: float list) =
+    reynolds
+    |> List.indexed
+    |> Returns.traverseListFailFast (fun (i, re) -> nusselt i re)
+    |> withContext "tube-side march"
+
+march [ 12000.0; 8000.0; 1500.0; 900.0 ]
+// Failure [InContext ("tube-side march", InContext ("node 2", OutOfRange ("Re", 1500.0)))]
+```
+
+The failure says what went wrong (`Re = 1500`) and where: node 2 of the tube-side march. Node 3 is never evaluated, because the march is fail-fast.
+
+### 10. The same warning 100 times: `dedupeWarnings` / `summariseWarnings`
+
+```fsharp
+open ROP
+
+let reynoldsAlongTube = [ for i in 0 .. 99 -> 1500.0 + 40.0 * float i ]
+
+let nodeHeatTransfer (re: float) : Returns<float,string> =
+    Returns.ok (0.023 * re ** 0.8)
+    |> Returns.warnIfLazy (fun _ -> re < 3000.0) (fun () -> "Gnielinski: Re below 3000, extrapolated")
+
+let profile = Returns.traverseList nodeHeatTransfer reynoldsAlongTube
+// Success ([...100 values...], [38 identical warnings])
+
+profile |> Returns.dedupeWarnings
+// Success ([...], ["Gnielinski: Re below 3000, extrapolated"])
+
+profile |> Returns.summariseWarnings id
+// Success ([...], [("Gnielinski: Re below 3000, extrapolated", 38)])
+```
+
+`summariseWarnings` takes a key function. With a union message such as `Extrapolated of correlation * node`, grouping by the correlation alone collapses warnings that differ only in the node index.
+
+### 11. Testing with `ROP.Testing`
+
+These helpers work with any test framework: a mismatch raises a plain exception, and xUnit, NUnit and Expecto all report it as a failure. Below, Expecto:
+
+```fsharp
+open Expecto
+open ROP.Testing
+
+let pressureDropTests =
+    testList "pressure drop" [
+        test "nominal flow passes, flagged as high" {
+            let dp = checkedDrop 9.0 |> expectWarningMatching ((=) "high pressure drop")
+            Expect.floatClose Accuracy.medium dp 64.8 "dp"
+        }
+        test "low flow is clean" {
+            checkedDrop 2.0 |> expectNoWarnings |> ignore
+        }
+        test "excessive flow is rejected, keeping the earlier warning" {
+            let errors = checkedDrop 12.0 |> expectFailure
+            Expect.equal errors.Length 2 "the filter error plus the earlier warning"
+        }
+        test "zero flow is rejected" {
+            checkedDrop 0.0 |> expectFailureMatching (fun m -> m.Contains "positive")
+        }
+    ]
+```
+
+On a mismatch, the exception message lists every message, not just the first:
+
+```text
+Expected Success, but got Failure with 2 error(s):
+  [1] flow must be positive
+  [2] U must be positive
+```
+
+### 12. End to end: sizing a heat exchanger
+
+This example uses every part of the library at once:
+- the inputs are validated **in parallel**, so every problem is reported together;
+- the calculation runs **sequentially**, raising warnings without stopping;
+- the result gets a **post-condition**;
+- the **edge** of the program turns everything into a report with `Pass | Warn | Fail`.
+
+```fsharp
+open ROP
+
+type Stream = { Name: string; MassFlow: float; Cp: float; TIn: float; TOut: float }
+
+type HxMsg =
+    | NonPositive of field: string
+    | TemperatureCross of deltaT: float
+    | EnergyImbalance of percent: float
+    | SmallApproach of deltaT: float
+    | AreaTooLarge of area: float
+
+let positive field (v: float) : Returns<float,HxMsg> =
+    if v > 0.0 then Returns.ok v else Returns.fail (NonPositive field)
+
+// Independent checks on one stream: all run, every failure reported.
+let validateStream (s: Stream) : Returns<Stream,HxMsg> =
+    s |> Returns.validateAll [
+        fun s -> positive $"{s.Name}.MassFlow" s.MassFlow |> Returns.map ignore
+        fun s -> positive $"{s.Name}.Cp" s.Cp |> Returns.map ignore ]
+
+// Counter-current log-mean temperature difference.
+let logMeanDeltaT (hot: Stream) (cold: Stream) : Returns<float,HxMsg> =
+    let dt1 = hot.TIn - cold.TOut
+    let dt2 = hot.TOut - cold.TIn
+    if dt1 <= 0.0 || dt2 <= 0.0 then Returns.fail (TemperatureCross (min dt1 dt2))
+    else
+        Returns.ok (if abs (dt1 - dt2) < 1e-9 then dt1 else (dt1 - dt2) / log (dt1 / dt2))
+        |> Returns.warnIfLazy (fun _ -> min dt1 dt2 < 5.0) (fun () -> SmallApproach (min dt1 dt2))
+
+let design (hot: Stream) (cold: Stream) (u: float) : Returns<float,HxMsg> =
+    returns {
+        // Parallel: all three inputs are validated, every problem is reported at once.
+        let! hot = validateStream hot
+        and! cold = validateStream cold
+        and! u = positive "U" u
+        // Sequential: each step needs the previous one.
+        let qHot = hot.MassFlow * hot.Cp * (hot.TIn - hot.TOut)
+        let qCold = cold.MassFlow * cold.Cp * (cold.TOut - cold.TIn)
+        let imbalance = 100.0 * abs (qHot - qCold) / qHot
+        let! lmtd = logMeanDeltaT hot cold
+        return! Returns.ok (qHot / (u * lmtd))
+                |> Returns.warnIfLazy (fun _ -> imbalance > 2.0) (fun () -> EnergyImbalance (round imbalance))
+    }
+    // Post-condition on the result: the warnings raised so far are kept if it fails.
+    |> Returns.filterWith (fun area -> area <= 500.0) (round >> AreaTooLarge)
+
+// The edge of the program: the only place that pattern-matches.
+let report r =
+    match r with
+    | Returns.Pass area       -> printfn "Area %.2f m2" area
+    | Returns.Warn (area, ws) -> printfn "Area %.2f m2, with warnings: %A" area ws
+    | Returns.Fail errs       -> printfn "Design rejected: %A" errs
+
+let hot  = { Name = "hot";  MassFlow = 2.0; Cp = 4.18; TIn = 90.0; TOut = 60.0 }
+let cold = { Name = "cold"; MassFlow = 3.0; Cp = 4.18; TIn = 20.0; TOut = 40.0 }
+
+report (design hot cold 0.5)
+// Area 11.19 m2
+
+report (design hot { cold with TOut = 87.0 } 0.5)
+// Area 35.12 m2, with warnings: [EnergyImbalance 235.0; SmallApproach 3.0]
+
+report (design { hot with MassFlow = 0.0 } { cold with Cp = -1.0 } -0.5)
+// Design rejected: [NonPositive "hot.MassFlow"; NonPositive "cold.Cp"; NonPositive "U"]
+
+report (design hot { cold with TOut = 95.0 } 0.5)
+// Design rejected: [TemperatureCross -5.0]
+
+report (design hot cold 0.01)
+// Design rejected: [AreaTooLarge 560.0]
+```
+
+Things to notice:
+- **Invalid inputs:** the third case reports all three bad inputs at once, even though they come from two different streams and a scalar.
+- **Warning order:** in the second case the warnings come out newest first, because `let!`/`>>=` put each later step's warnings in front.
+- **Calculation errors:** a temperature cross is a failure of the calculation itself, found only after the inputs have been accepted, so it stops the sequential part.
+
+A longer version, with layered and remapped error messages, is in `ROP/Examples.Returns.HeatExchanger.fsx`.
 
 ---
 
@@ -605,6 +813,16 @@ dotnet nuget push ./nupkgs/Ganfoss.ROP.0.0.1-local.nupkg --source %USERPROFILE%\
 ```
 
 (On Windows the cache is `%USERPROFILE%\.nuget\packages`; on macOS/Linux it's `~/.nuget/packages`.) This requires no admin rights — it's entirely within your user profile.
+
+---
+
+## License
+
+Ganfoss.ROP is released under the **[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)** (see [LICENSE](LICENSE)):
+- **Allowed:** use, modification and redistribution for any noncommercial purpose. That includes personal use, research, education, and use by noncommercial organizations such as charities, educational and public research institutions, and government bodies.
+- **Not covered:** commercial use.
+
+The same license file ships inside the NuGet package.
 
 ---
 
