@@ -160,6 +160,43 @@ module Returns =
         | Success (value, msgs) when predicate value -> Success (value, msgs @ [buildMessage value])
         | _ -> returns
 
+    /// <summary>
+    /// Post-condition check: turns a Success into a Failure when the predicate does NOT hold for its value.
+    /// Successes that satisfy the predicate, and Failures, are propagated unchanged.
+    /// </summary>
+    /// <remarks>
+    /// Like a failing step in a <c>&gt;&gt;=</c> chain, the warnings collected so far are kept: the Failure carries
+    /// <paramref name="message"/> followed by the former warnings, so a range check after a calculation does not
+    /// hide the caveats raised during it. The message is an already-built value (evaluated even when the check
+    /// passes); use <see cref="filterWith"/> when building it is expensive.
+    /// </remarks>
+    /// <param name="predicate">The condition the Success value must satisfy to stay a Success.</param>
+    /// <param name="message">The error message used when the predicate does not hold.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The input unchanged when it is a Failure or its value satisfies the predicate; otherwise a Failure of <paramref name="message"/> followed by the former warnings.</returns>
+    let inline filter (predicate: 'TSuccess -> bool) (message: 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success (value, msgs) when not (predicate value) -> Failure (message :: msgs)
+        | _ -> returns
+
+    /// <summary>
+    /// Lazy, value-aware variant of <see cref="filter"/>: turns a Success into a Failure when the predicate does NOT
+    /// hold, building the error message from the value only in that case.
+    /// </summary>
+    /// <remarks>
+    /// Avoids the eager-argument trap of <c>filter</c> (see <see cref="warnIfLazy"/>): the message, typically an
+    /// interpolated string mentioning the offending value, is built only when the check fails. The warnings collected
+    /// so far are kept after the error, as in <see cref="filter"/>.
+    /// </remarks>
+    /// <param name="predicate">The condition the Success value must satisfy to stay a Success.</param>
+    /// <param name="buildMessage">Builds the error message from the offending value; invoked only when the predicate is false.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The input unchanged when it is a Failure or its value satisfies the predicate; otherwise a Failure of the built message followed by the former warnings.</returns>
+    let inline filterWith (predicate: 'TSuccess -> bool) (buildMessage: 'TSuccess -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success (value, msgs) when not (predicate value) -> Failure (buildMessage value :: msgs)
+        | _ -> returns
+
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
@@ -195,6 +232,23 @@ module Returns =
       // List.isEmpty is a case check; `msgs <> []` went through (much slower) generic structural equality.
       | Success (_, msgs) when not (List.isEmpty msgs) -> Failure msgs
       | _ -> returns
+
+    /// <summary>
+    /// Error recovery: hands the errors of a Failure to a compensation function, whose result (a fallback Success,
+    /// or a different Failure) replaces it. Successes are propagated unchanged and the function is not invoked.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="defaultValue"/>/<see cref="defaultWith"/>, which leave the railway and return a bare value,
+    /// <c>recover</c> stays on it: the fallback can carry a warning saying that it is one (for example
+    /// <c>Returns.recover (fun errs -&gt; Returns.warn (UsedDefault errs) 0.0)</c>), so the substitution is not silent.
+    /// </remarks>
+    /// <param name="compensation">Receives the error messages and returns the replacement <c>Returns</c>.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The input unchanged when it is a Success; otherwise the result of <paramref name="compensation"/>.</returns>
+    let inline recover (compensation: 'TMessage list -> Returns<'TSuccess,'TMessage>) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Failure errs -> compensation errs
+        | Success _    -> returns
 
     // -------------------------------------------------------------------------------------- //
 

@@ -22,6 +22,14 @@ This repository contains an F# library that implements a Railway-Oriented Progra
 
 ---
 
+## What's new in 1.2.0
+
+This release only adds; code written against 1.1.x compiles unchanged.
+
+- `Returns.filter` and `Returns.filterWith` add post-condition checks, turning a Success into a Failure when a predicate fails. The warnings collected so far are kept after the error, as with a failing `>>=` step. `filterWith` builds the message from the value, and only when the check fails.
+- `Returns.recover` provides error recovery: the errors go to a compensation function whose result replaces the Failure. That result can be a fallback Success, ideally with a warning saying so, or a different Failure.
+- There are 74 more tests (363 in total). They include coverage for the `Result` extensions (`map2`–`map4`, `mapError`, `flatten`, `merge`, `zip`, `partition`, `fold`, `foldList`, the tee functions, `compose`, `protect`), `Returns.log`, and complex-object integration scenarios.
+
 ## What's new in 1.1.0
 
 This release only adds; code written against 1.0.x compiles unchanged.
@@ -146,7 +154,7 @@ ROP/
 │   └── AllocProbe/            # allocation probe backing ZERO-ALLOC.md (not in ROP.sln)
 ├── Test/
 │   ├── Test.fsproj
-│   └── Program.fs             # Expecto test suite (287+ tests)
+│   └── Program.fs             # Expecto test suite (363 tests)
 └── Setup/
     └── Setup.vdproj           # legacy Visual Studio Installer project (not part of the build)
 ```
@@ -173,7 +181,8 @@ ROP/
   - Sequential: `bind`, `compose`, `>>=`, `>=>`, `<=<`
   - Applicative: `apply`, `map`, `map2`, `map3`, `map4`, `<!>`, `<*>`
   - Parallel: `plus`, `&&&`, `validateAll`
-- Message handling: `jointMessages`, `mapMessages`, `mapWarnings`, `mapErrors`, `warnIf`, `warnIfLazy` (message built only when the predicate holds)
+- Message handling: `jointMessages`, `mapMessages`, `mapWarnings`, `mapErrors`, `warnIf`, `warnIfLazy` / `warnIfWith` (message built only when the predicate holds)
+- Post-conditions and recovery: `filter` / `filterWith` (Success → Failure when a predicate fails, keeping earlier warnings), `recover` (Failure → fallback via a compensation function)
 - Warning aggregation: `dedupeWarnings` (drop repeats, keep first-occurrence order), `summariseWarnings` (group by key, with counts)
 - Failure provenance: `withContextBy` (annotate every error with a context label, building a breadcrumb trail)
 - Collection helpers: `partition`, `zip`, `fold`, and the traversals:

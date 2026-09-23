@@ -42,7 +42,8 @@ An F# library (multi-targets .NET 8 LTS and .NET 10) implementing Railway-Orient
   - *Applicative*: `<!>` (map), `<*>` (apply)
   - *Parallel* (accumulate all failures): `&&&`, `validateAll`
   - *Collection*: `traverseList`/`traverseArray` (accumulate all failures), `traverseListFailFast`/`traverseArrayFailFast` (stop at the first), `sequenceList`, `partition`, `fold`
-  - *Warnings/context*: `warnIfLazy`, `dedupeWarnings`, `summariseWarnings`, `withContextBy`
+  - *Warnings/context*: `warnIfLazy`, `warnIfWith`, `dedupeWarnings`, `summariseWarnings`, `withContextBy`
+  - *Post-conditions/recovery*: `filter`, `filterWith`, `recover`
 
 - **`Testing.fs`** — `ROP.Testing`: framework-agnostic assertions for tests (`getOrFail`, `expectFailure`, `expectNoWarnings`, ...); failures raise a plain exception rendering every message.
 
