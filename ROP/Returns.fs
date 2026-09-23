@@ -58,7 +58,9 @@ type Returns<'TSuccess, 'TMessage> =
     override this.ToString() =
         // Renders a message list as a single "; "-separated string, calling each message's own ToString().
         let printMsgs msgs =
-            msgs |> List.map (fun x -> x.ToString()) |> String.concat "; "
+            // Null-safe: a null message (e.g. a null string) renders as an empty string instead of throwing a
+            // NullReferenceException from inside ToString, which would hide the original result in logs.
+            msgs |> List.map (fun x -> match box x with null -> "" | o -> o.ToString()) |> String.concat "; "
         match this with
         // %A performs structural (reflection-based) formatting of the value, which is more informative than
         // %O for arbitrary record/tuple/list success values (at the cost of some reflection overhead) -
@@ -115,6 +117,13 @@ module Returns =
     /// <param name="message">Warning message to append when the predicate is true.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     /// <returns>The input with <paramref name="message"/> appended to its warnings when the predicate matches; otherwise the input unchanged.</returns>
+    /// <remarks>
+    /// Appending to the end of an immutable list copies it, so each call costs O(number of warnings already present).
+    /// That is negligible in a pipeline, but calling <c>warnIf</c> thousands of times on the SAME accumulating value
+    /// (e.g. in a loop) is quadratic: 20,000 calls allocate about 6 GB. In a loop, produce one <c>Returns</c> per
+    /// item and combine them with <c>traverseList</c>/<c>traverseArray</c>, <c>validateAll</c> or a <c>for</c> loop
+    /// inside <c>returns { }</c>, which are all linear.
+    /// </remarks>
     let warnIf (predicate: 'TSuccess -> bool) (message: 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
         match returns with
         // Only a Success whose value satisfies the predicate gets the new warning appended; every other
@@ -1475,6 +1484,15 @@ type ReturnsBuilder() =
     /// <param name="returns">The <c>Returns</c> value to pass through unchanged.</param>
     /// <returns><paramref name="returns"/>, unchanged.</returns>
     member inline _.Source(returns: Returns<_, _>) : Returns<_, _> = returns
+
+    /// <summary>
+    /// Identity hook for the sequence of a <c>for x in xs do ...</c> loop. Once a builder defines <c>Source</c>, the
+    /// compiler applies it to <c>for</c> sequences too; without this overload, <c>for</c> loops inside
+    /// <c>returns { }</c> did not compile.
+    /// </summary>
+    /// <param name="source">The sequence being iterated.</param>
+    /// <returns><paramref name="source"/>, unchanged.</returns>
+    member inline _.Source(source: seq<'T>) : seq<'T> = source
 
     /// <summary>Implements <c>let! x = m in ...</c>: sequential (short-circuiting) binding.</summary>
     /// <param name="m">The <c>Returns</c> value being bound.</param>

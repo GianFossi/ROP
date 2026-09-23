@@ -64,6 +64,14 @@ Every rewrite below keeps the semantics exactly: same values, same warnings and 
   - `isEqualTo`, `isNotEqualTo`, `isGreaterThan(OrEqualTo)` and `isLessThan(OrEqualTo)` are `inline`, so comparisons are specialized to the property type instead of boxing both operands.
   - `hasLengthOf`, `hasMinLengthOf`, `hasMaxLengthOf`, `isNotEmpty` and `isEmpty` read `string.Length` instead of enumerating the string character by character.
 
+**Quadratic patterns to avoid.** Warnings are immutable lists, so appending to the end of one copies it.
+- **`warnIf` on the same accumulating value.** Each call costs O(warnings already present). Measured on net8.0 Release: 5,000 appends cost 0.4 GB and 245 ms; 10,000 cost 1.6 GB and 447 ms; 20,000 cost 6.4 GB and 1.8 s.
+- **Long `&&&` chains where every validator warns.** They grow the same way: 1,000 / 2,000 / 4,000 validators allocate 16 / 64 / 257 MB.
+
+`validateAll` with the same 4,000 warning validators allocates 0.8 MB. So do per-item `Returns` combined with `traverseList`/`traverseArray` or a `for` loop in `returns { }`: they are all linear, as the linearity guards in `Test/Performance.fs` check.
+
+**Stack safety.** `traverseList`, `traverseListFailFast`, `traverseArray`, `sequenceList`, `fold`, `partition`, `validateAll`, a 1M-step `>>=` chain, a 1M-iteration `for` loop in `returns { }`, and `eachItemWith` over 1M items all complete without deep recursion. The load tests cover several of these.
+
 What remains is inherent. Each step's own `Success` costs 32 B. The partial-application closures of `f <!> a <*> b <*> c` are built into curried applicative style; use `map3` or `and!` when that matters. Warnings are lists. None of this can be removed without a different type, and the next section explains why that isn't worth it.
 
 ## Is a struct variant viable?

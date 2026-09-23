@@ -28,7 +28,10 @@ This release only adds; code written against 1.1.x compiles unchanged.
 
 - `Returns.filter` and `Returns.filterWith` add post-condition checks, turning a Success into a Failure when a predicate fails. The warnings collected so far are kept after the error, as with a failing `>>=` step. `filterWith` builds the message from the value, and only when the check fails.
 - `Returns.recover` provides error recovery: the errors go to a compensation function whose result replaces the Failure. That result can be a fallback Success, ideally with a warning saying so, or a different Failure.
-- There are 74 more tests (363 in total). They include coverage for the `Result` extensions (`map2`–`map4`, `mapError`, `flatten`, `merge`, `zip`, `partition`, `fold`, `foldList`, the tee functions, `compose`, `protect`), `Returns.log`, and complex-object integration scenarios.
+- `for` loops inside `returns { }` now compile. They never did before: the builder's `Source` member only accepted `Returns` values, and the compiler applies `Source` to the sequence of a `for` loop too.
+- `Returns.ToString()` no longer throws `NullReferenceException` when a message is `null`.
+- Load tests with time and memory budgets are new; see [Load tests](#load-tests-time-and-memory-budgets).
+- There are 91 more tests (380 in total). They include coverage for the `Result` extensions (`map2`–`map4`, `mapError`, `flatten`, `merge`, `zip`, `partition`, `fold`, `foldList`, the tee functions, `compose`, `protect`), `Returns.log`, and complex-object integration scenarios.
 
 ## What's new in 1.1.0
 
@@ -154,7 +157,8 @@ ROP/
 │   └── AllocProbe/            # allocation probe backing ZERO-ALLOC.md (not in ROP.sln)
 ├── Test/
 │   ├── Test.fsproj
-│   └── Program.fs             # Expecto test suite (363 tests)
+│   ├── Performance.fs         # load tests with time and memory budgets
+│   └── Program.fs             # Expecto test suite (380 tests)
 └── Setup/
     └── Setup.vdproj           # legacy Visual Studio Installer project (not part of the build)
 ```
@@ -687,6 +691,38 @@ Tests are in `Test/Program.fs` and grouped by behavior:
 - `Integration - End-to-end`
 
 The test entry point composes all test lists into a single `All Tests` suite.
+
+### Load tests (time and memory budgets)
+
+`Test/Performance.fs` runs intensive, realistic workloads and checks both the result and the cost:
+
+| Scenario | Items | What it exercises |
+| --- | ---: | --- |
+| Marching solver, clean / with 50 defective nodes | 50,000 | `&&&` input checks, a `>>=` chain, `warnIfLazy`, `filterWith`, `withContextBy`, `traverseArray`, `summariseWarnings` |
+| Validation DSL, 10% invalid records | 20,000 | `createValidatorFor`, 9 checks per record |
+| CE pipeline | 100,000 | `let!` / `and!` / `and!` / `let!` / `filter` |
+| CE `for` loop collecting warnings | 200,000 | `returns { for … do do! … }` |
+| `traverseList`, `>>=` chain, `fold` | 1,000,000 | stack safety at scale |
+| Linearity guards | n and 2n | bytes per item must not grow with size, which catches accidental O(n²) |
+
+Each scenario has a **`PerfBudget`** with two limits:
+- `MaxMilliseconds`: the wall-clock time of the measured run;
+- `MaxBytesPerItem`: the bytes allocated per processed item, with separate values for Debug and Release builds.
+
+A warm-up run comes first, and every run prints a line like:
+
+```text
+[perf] marching solver: 50k nodes, clean     50000 items     14.7 ms     294.1 ns/item     323.2 B/item  gen0=1
+```
+
+Two environment variables control them:
+
+| Variable | Effect |
+| --- | --- |
+| `ROP_PERF_TIME_SCALE` | Multiplies every time budget (default `1`). CI sets it to `3` because shared runners are slower. |
+| `ROP_PERF_SKIP=1` | Skips the load tests. |
+
+Memory budgets are never scaled. Allocations are deterministic, and identical on net8.0 and net10.0, so exceeding one means the code changed, not the machine.
 
 ---
 

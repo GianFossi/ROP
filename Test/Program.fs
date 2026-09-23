@@ -691,6 +691,13 @@ let returnsActivePatternTests =
 let returnsToStringTests =
     testList "Returns - ToString" [
 
+        test "ToString does not throw on null messages" {
+            let r : Returns<int,string> = Returns.failmany [ "e1"; null; "e3" ]
+            Expect.equal (r.ToString()) "Failure: e1; ; e3" "null rendered as empty"
+            let w : Returns<int,string> = Success (1, [ null ])
+            Expect.stringStarts (w.ToString()) "Success: 1" "no exception on a null warning"
+        }
+
         test "Success with no messages has correct string format" {
             let r = Returns.ok 42
             let s = r.ToString()
@@ -1899,6 +1906,47 @@ let integrationTests =
 // v1.1.0 additions
 // ============================================================
 
+let returnsBuilderForLoopTests =
+    testList "ReturnsBuilder - for loops" [
+
+        test "for over a list collects the warnings of every iteration, in order" {
+            let r = returns {
+                for x in [ 1; 2; 3; 4 ] do
+                    do! (if x % 2 = 0 then Returns.warn $"even {x}" () else Returns.ok ())
+            }
+            Expect.equal r (Success ((), [ "even 2"; "even 4" ])) "warnings in iteration order"
+        }
+
+        test "for stops at the first failing iteration, keeping earlier warnings before the errors" {
+            let visited = ResizeArray()
+            let r = returns {
+                for x in [ 1; 2; 3; 4 ] do
+                    visited.Add x
+                    do! (if x = 3 then Returns.fail "three" elif x = 2 then Returns.warn "two" () else Returns.ok ())
+            }
+            Expect.equal r (Failure [ "two"; "three" ]) "earlier warnings, then the error"
+            Expect.equal (List.ofSeq visited) [ 1; 2; 3 ] "iteration 4 never runs"
+        }
+
+        test "for over an array, a range and an empty sequence" {
+            let total = ref 0
+            let r1 = returns { for x in [| 1; 2; 3 |] do total.Value <- total.Value + x }
+            let r2 = returns { for x in 1 .. 4 do total.Value <- total.Value + x }
+            let r3 : Returns<unit,string> = returns { for _ in Seq.empty<int> do () }
+            Expect.equal (r1, r2, r3) (Success ((), []), Success ((), []), Success ((), [])) "all succeed"
+            Expect.equal total.Value 16 "every element visited"
+        }
+
+        test "for followed by return in the same block" {
+            let r = returns {
+                for x in [ 1; 2 ] do
+                    do! Returns.warn $"w{x}" ()
+                return 42
+            }
+            Expect.equal r (Success (42, [ "w1"; "w2" ])) "loop warnings carried to the result"
+        }
+    ]
+
 let returnsWarnIfLazyTests =
     testList "Returns - warnIfLazy" [
 
@@ -3042,6 +3090,7 @@ let main argv =
             returnsMapWarningsErrorsTests
             returnsValidateAllTests
             returnsAndBangTests
+            returnsBuilderForLoopTests
             returnsWarnIfLazyTests
             returnsPlainResultTests
             returnsAggregationTests
@@ -3058,6 +3107,7 @@ let main argv =
             Ported.resultExtTeeLogTests
             Ported.resultExtComposeTests
             Ported.integrationComplexTests
+            PerformanceTests.performanceTests
             resultExtensionTests
             choiceExtensionTests
             optionExtensionTests

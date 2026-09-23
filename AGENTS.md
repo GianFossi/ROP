@@ -12,6 +12,10 @@ dotnet build ROP.sln
 dotnet run --project Test/Test.fsproj --framework net8.0
 dotnet run --project Test/Test.fsproj --framework net10.0
 
+# Load tests (Test/Performance.fs) run with the suite; they print "[perf]" lines and check time/memory budgets.
+# ROP_PERF_TIME_SCALE=3 relaxes time budgets on slow machines; ROP_PERF_SKIP=1 skips them.
+ROP_PERF_SKIP=1 dotnet run --project Test/Test.fsproj --framework net8.0
+
 # Run tests matching a name fragment (Expecto --filter)
 dotnet run --project Test/Test.fsproj --framework net8.0 -- --filter "Returns - bind"
 
