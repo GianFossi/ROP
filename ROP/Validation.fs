@@ -206,17 +206,24 @@ module Validation =
         /// <returns>A function that validates a <c>'targetType</c> record, aggregating every failure found.</returns>
         member __.Run (config: PropertyValidatorConfig list) =
             let execValidation (record:'targetType) : ValidationState =
-                let results =
-                    config
-                    // Skip any property block whose predicate says it doesn't apply to this record (e.g. validateWhen).
-                    |> List.filter (fun p -> p.predicate(record :> obj))
-                    // Run every remaining property's validators against the record, producing one ValidationState per validator.
-                    |> List.collect (fun p -> p.validators |> List.map (fun v -> v(record)))
-                    // Keep only the failing ones and flatten their ValidationItem lists into a single list.
-                    |> List.collect (fun f -> match f with | Errors e -> e | _ -> [])
-                match results with
+                // Box once (a no-op for reference types) rather than once per predicate and per validator.
+                let boxed = record :> obj
+                // Single pass without intermediate lists: property blocks whose predicate says they don't apply
+                // (e.g. validateWhen) are skipped; the item lists of failing validators are collected in reverse
+                // and concatenated once at the end, so a valid record allocates nothing here.
+                let mutable failuresRev : ValidationItem list list = []
+                for p in config do
+                    if p.predicate boxed then
+                        for validator in p.validators do
+                            match validator boxed with
+                            | Errors e -> failuresRev <- e :: failuresRev
+                            | Ok -> ()
+                match failuresRev with
                 | [] -> Ok
-                | _  -> Errors results
+                | _ ->
+                    match List.concat (List.rev failuresRev) with
+                    | []      -> Ok
+                    | results -> Errors results
             execValidation
 
         /// <summary>
@@ -375,13 +382,17 @@ module Validation =
 
 
     // General validators
+    //
+    // The comparison validators (isEqualTo ... isLessThan) are inline so that `=`, `<`, `>=`... are specialized to
+    // the property type at the call site; non-inline, they went through generic comparison/equality, boxing both
+    // operands on every check.
 
     /// <summary>
     /// Creates a validator that succeeds only if the property value equals <paramref name="comparisonValue"/>.
     /// </summary>
     /// <param name="comparisonValue">The value the property must equal.</param>
     /// <returns>A <c>string -&gt; 'a -&gt; ValidationState</c> validator function (property name, then value).</returns>
-    let isEqualTo comparisonValue =
+    let inline isEqualTo comparisonValue =
         let comparator propertyName value =
             // Structural equality check against the closed-over comparison value.
             match value = comparisonValue with
@@ -394,7 +405,7 @@ module Validation =
     /// </summary>
     /// <param name="comparisonValue">The value the property must not equal.</param>
     /// <returns>A <c>string -&gt; 'a -&gt; ValidationState</c> validator function (property name, then value).</returns>
-    let isNotEqualTo comparisonValue =
+    let inline isNotEqualTo comparisonValue =
         let comparator propertyName value =
             match not (value = comparisonValue) with
             | true -> Ok
@@ -418,7 +429,7 @@ module Validation =
     /// </summary>
     /// <param name="minValue">The inclusive minimum allowed value.</param>
     /// <returns>A <c>string -&gt; 'a -&gt; ValidationState</c> validator function (property name, then value).</returns>
-    let isGreaterThanOrEqualTo minValue =
+    let inline isGreaterThanOrEqualTo minValue =
         let comparator propertyName value =
             match value >= minValue with
             | true -> Ok
@@ -430,7 +441,7 @@ module Validation =
     /// </summary>
     /// <param name="minValue">The exclusive minimum allowed value.</param>
     /// <returns>A <c>string -&gt; 'a -&gt; ValidationState</c> validator function (property name, then value).</returns>
-    let isGreaterThan minValue =
+    let inline isGreaterThan minValue =
         let comparator propertyName value =
             match value > minValue with
             | true -> Ok
@@ -442,7 +453,7 @@ module Validation =
     /// </summary>
     /// <param name="maxValue">The inclusive maximum allowed value.</param>
     /// <returns>A <c>string -&gt; 'a -&gt; ValidationState</c> validator function (property name, then value).</returns>
-    let isLessThanOrEqualTo maxValue =
+    let inline isLessThanOrEqualTo maxValue =
         let comparator propertyName value =
             match value <= maxValue with
             | true -> Ok
@@ -454,7 +465,7 @@ module Validation =
     /// </summary>
     /// <param name="lessThanValue">The exclusive maximum allowed value.</param>
     /// <returns>A <c>string -&gt; 'a -&gt; ValidationState</c> validator function (property name, then value).</returns>
-    let isLessThan lessThanValue =
+    let inline isLessThan lessThanValue =
         let comparator propertyName value =
             match value < lessThanValue with
             | true -> Ok
@@ -468,12 +479,24 @@ module Validation =
     /// </summary>
     /// <param name="propertyName">The name/path of the property being validated (supplied by the CE plumbing).</param>
     /// <param name="value">The sequence to check.</param>
+    // Length/emptiness of a sequence, reading string.Length directly: Seq.length/Seq.isEmpty have fast paths
+    // for arrays, lists and ICollection, but walk a string char by char through a heap-allocated enumerator.
+    let private seqLength (value: seq<'item>) =
+        match box value with
+        | :? string as s -> s.Length
+        | _ -> Seq.length value
+
+    let private seqIsEmpty (value: seq<'item>) =
+        match box value with
+        | :? string as s -> s.Length = 0
+        | _ -> Seq.isEmpty value
+
     let isNotEmpty propertyName (value:seq<'item>) = // this also applies to strings
         // Seq.isEmpty short-circuits on the first element instead of fully enumerating (Seq.length),
         // which is both faster for large sequences and correct for infinite/lazy ones.
         if isNull(value) then
             Errors([{ message = "Must not be null"; property = propertyName ; errorCode = "isNotEmpty" }])
-        elif Seq.isEmpty value then
+        elif seqIsEmpty value then
             Errors([{ message = "Must not be empty"; property = propertyName ; errorCode = "isNotEmpty" }])
         else
             Ok
@@ -484,7 +507,7 @@ module Validation =
     /// <param name="propertyName">The name/path of the property being validated (supplied by the CE plumbing).</param>
     /// <param name="value">The sequence to check.</param>
     let isEmpty propertyName (value:seq<'item>) = // this also applies to strings
-        if not ( isNull(value) || Seq.isEmpty value) then
+        if not ( isNull(value) || seqIsEmpty value) then
             Errors([{ message = "Must be empty"; property = propertyName ; errorCode = "isEmpty" }])
         else
             Ok
@@ -525,7 +548,7 @@ module Validation =
     let hasLengthOf length =
         let comparator propertyName (value:seq<'item>) =
             // Exact-count checks genuinely need the full length, so the sequence must be fully enumerated here.
-            match (Seq.length value) = length with
+            match (seqLength value) = length with
             | true -> Ok
             | false -> Errors([{ message = sprintf "Must have a length of %O" length; property = propertyName ; errorCode = "hasLengthOf" }])
         comparator
@@ -537,7 +560,7 @@ module Validation =
     /// <returns>A <c>string -&gt; seq&lt;'a&gt; -&gt; ValidationState</c> validator function (property name, then sequence).</returns>
     let hasMinLengthOf length =
         let comparator propertyName (value:seq<'item>) =
-            match (Seq.length value) >= length with
+            match (seqLength value) >= length with
             | true -> Ok
             | false -> Errors([{ message = sprintf "Must have a length no less than %O" length; property = propertyName ; errorCode = "hasMinLengthOf" }])
         comparator
@@ -549,7 +572,7 @@ module Validation =
     /// <returns>A <c>string -&gt; seq&lt;'a&gt; -&gt; ValidationState</c> validator function (property name, then sequence).</returns>
     let hasMaxLengthOf length =
         let comparator propertyName (value:seq<'item>) =
-            match (Seq.length value) <= length with
+            match (seqLength value) <= length with
             | true -> Ok
             | false -> Errors([{ message = sprintf "Must have a length no greater than %O" length; property = propertyName ; errorCode = "hasMaxLengthOf" }])
         comparator

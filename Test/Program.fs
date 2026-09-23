@@ -2119,6 +2119,200 @@ let testingModuleTests =
     ]
 
 // ============================================================
+// Performance rewrites: equivalence with the previous implementations
+// ============================================================
+
+/// Verbatim copies of the implementations before the performance rewrite, used as oracles: every rewritten
+/// combinator must return exactly what its previous version returned, on every combination of inputs.
+module Reference =
+
+    let map2 f r1 r2 = Returns.ok f |> Returns.apply <| r1 |> Returns.apply <| r2
+    let map3 f r1 r2 r3 = Returns.ok f |> Returns.apply <| r1 |> Returns.apply <| r2 |> Returns.apply <| r3
+    let map4 f r1 r2 r3 r4 = Returns.ok f |> Returns.apply <| r1 |> Returns.apply <| r2 |> Returns.apply <| r3 |> Returns.apply <| r4
+
+    let andAnd f1 f2 = Returns.plus (fun s1 _ -> s1) (fun e1 e2 -> e1 @ e2) f1 f2
+
+    let fold folder (state: Returns<'S,'M>) (returns: Returns<'T,'M> seq) =
+        let revAppend xs ys = List.fold (fun acc x -> x :: acc) ys xs
+        let mutable acc =
+            match state with
+            | Success (s, msgs) -> Choice1Of2 (s, List.rev msgs)
+            | Failure msgs       -> Choice2Of2 (List.rev msgs)
+        for r in returns do
+            acc <-
+                match acc, r with
+                | Choice1Of2 (s, msgsRev), Success (v, msgs) -> Choice1Of2 (folder s v, revAppend msgs msgsRev)
+                | Choice2Of2 errsRev,      Success _         -> Choice2Of2 errsRev
+                | Choice1Of2 _,            Failure errs      -> Choice2Of2 (List.rev errs)
+                | Choice2Of2 errsRev,      Failure errs      -> Choice2Of2 (revAppend errs errsRev)
+        match acc with
+        | Choice1Of2 (s, msgsRev) -> Success (s, List.rev msgsRev)
+        | Choice2Of2 errsRev      -> Failure (List.rev errsRev)
+
+    let traverseList (f: 'a -> Returns<'b,'m>) (inputs: 'a list) : Returns<'b list,'m> =
+        let revAppend xs ys = List.fold (fun acc x -> x :: acc) ys xs
+        let folder state current =
+            match state, f current with
+            | Success (acc, msgsRev), Success (v, msgs) -> Success (v :: acc, revAppend msgs msgsRev)
+            | Failure errsRev,        Success _         -> Failure errsRev
+            | Success _,              Failure errs      -> Failure (List.rev errs)
+            | Failure errsRev,        Failure errs      -> Failure (revAppend errs errsRev)
+        match List.fold folder (Success ([], [])) inputs with
+        | Success (acc, msgsRev) -> Success (List.rev acc, List.rev msgsRev)
+        | Failure errsRev        -> Failure (List.rev errsRev)
+
+    let traverseListFailFast (f: 'a -> Returns<'b,'m>) (inputs: 'a list) : Returns<'b list,'m> =
+        let revAppend xs ys = List.fold (fun acc x -> x :: acc) ys xs
+        let rec loop valuesRev msgsRev remaining =
+            match remaining with
+            | [] -> Success (List.rev valuesRev, List.rev msgsRev)
+            | x :: rest ->
+                match f x with
+                | Success (v, msgs) -> loop (v :: valuesRev) (revAppend msgs msgsRev) rest
+                | Failure errs      -> Failure (List.rev msgsRev @ errs)
+        loop [] [] inputs
+
+    let validateAll (validators: ('a -> Returns<unit,'m>) list) (value: 'a) : Returns<'a,'m> =
+        let results = validators |> List.map (fun v -> v value)
+        let errors  = results |> List.collect (fun r -> match r with | Failure msgs -> msgs | _ -> [])
+        let warns   = results |> List.collect (fun r -> match r with | Success (_, msgs) -> msgs | _ -> [])
+        match errors with
+        | [] -> Success (value, warns)
+        | _  -> Failure errors
+
+/// Every shape a single Returns can take that matters to the combinators: clean Success, Success with one or two
+/// warnings, Failure with one or two errors, and the degenerate Failure [] (not produced by the library's own
+/// constructors, but constructible, so the rewrites must treat it exactly as before).
+let shapes (tag: string) (value: int) : Returns<int,string> list =
+    [ Success (value, [])
+      Success (value, [ tag + "w1" ])
+      Success (value, [ tag + "w1"; tag + "w2" ])
+      Failure [ tag + "e1" ]
+      Failure [ tag + "e1"; tag + "e2" ]
+      Failure [] ]
+
+/// All lists of length 0..maxLen whose elements are drawn from `shapes`, each element tagged by its position.
+let rec shapeLists maxLen : Returns<int,string> list list =
+    if maxLen = 0 then [ [] ]
+    else
+        let shorter = shapeLists (maxLen - 1)
+        [ yield! shorter
+          for tail in shorter |> List.filter (fun l -> l.Length = maxLen - 1) do
+              for head in shapes $"[{maxLen}]" maxLen do
+                  yield head :: tail ]
+
+let performanceEquivalenceTests =
+    testList "Performance rewrites - equivalence with previous implementations" [
+
+        test "map2 / map3 / map4 match the apply chain on every combination" {
+            for a in shapes "a" 1 do
+                for b in shapes "b" 2 do
+                    Expect.equal (Returns.map2 (+) a b) (Reference.map2 (+) a b) $"map2 {a} {b}"
+                    for c in shapes "c" 3 do
+                        Expect.equal (Returns.map3 (fun x y z -> x + 10*y + 100*z) a b c)
+                                     (Reference.map3 (fun x y z -> x + 10*y + 100*z) a b c) $"map3 {a} {b} {c}"
+                        for d in shapes "d" 4 do
+                            Expect.equal (Returns.map4 (fun x y z w -> x + y + z + w) a b c d)
+                                         (Reference.map4 (fun x y z w -> x + y + z + w) a b c d) $"map4 {a} {b} {c} {d}"
+        }
+
+        test "map matches apply (ok f) on every shape" {
+            for a in shapes "a" 1 do
+                Expect.equal (Returns.map ((*) 2) a) (Returns.apply (Returns.ok ((*) 2)) a) $"map {a}"
+        }
+
+        test "&&& matches plus-based composition on every combination" {
+            for a in shapes "a" 1 do
+                for b in shapes "b" 2 do
+                    Expect.equal ((fun _ -> a) &&& (fun _ -> b) <| ()) (Reference.andAnd (fun _ -> a) (fun _ -> b) ()) $"&&& {a} {b}"
+        }
+
+        test "and! (Bind2Return / Bind3Return) match MergeSources + BindReturn semantics" {
+            for a in shapes "a" 1 do
+                for b in shapes "b" 2 do
+                    let r2 = returns { let! x = a
+                                       and! y = b
+                                       return x + 10*y }
+                    Expect.equal r2 (Reference.map2 (fun x y -> x + 10*y) a b) $"and! x2 {a} {b}"
+                    for c in shapes "c" 3 do
+                        let r3 = returns { let! x = a
+                                           and! y = b
+                                           and! z = c
+                                           return x + 10*y + 100*z }
+                        Expect.equal r3 (Reference.map3 (fun x y z -> x + 10*y + 100*z) a b c) $"and! x3 {a} {b} {c}"
+        }
+
+        test "fold matches the previous implementation on every list up to length 3, for every seed" {
+            for seed in shapes "s" 0 do
+                for l in shapeLists 3 do
+                    Expect.equal (Returns.fold (+) seed l) (Reference.fold (+) seed l) $"fold {seed} {l}"
+        }
+
+        test "traverseList / sequenceList / traverseListFailFast match the previous implementations up to length 3" {
+            for l in shapeLists 3 do
+                Expect.equal (Returns.traverseList id l) (Reference.traverseList id l) $"traverseList {l}"
+                Expect.equal (Returns.sequenceList l) (Reference.traverseList id l) $"sequenceList {l}"
+                Expect.equal (Returns.traverseListFailFast id l) (Reference.traverseListFailFast id l) $"traverseListFailFast {l}"
+        }
+
+        test "traverseArray / traverseArrayFailFast match their list counterparts, including Failure []" {
+            for l in shapeLists 3 do
+                let arr = Array.ofList l
+                Expect.equal (Returns.traverseArray id arr |> Returns.map List.ofArray) (Returns.traverseList id l) $"traverseArray {l}"
+                Expect.equal (Returns.traverseArrayFailFast id arr |> Returns.map List.ofArray) (Returns.traverseListFailFast id l) $"traverseArrayFailFast {l}"
+        }
+
+        test "validateAll matches the previous implementation on every list of up to 3 validators" {
+            for l in shapeLists 3 do
+                let validators = l |> List.map (fun r -> fun (_: int) -> r |> Returns.map ignore)
+                Expect.equal (Returns.validateAll validators 42) (Reference.validateAll validators 42) $"validateAll {l}"
+        }
+
+        test "mapWarnings / failOnWarnings / dedupeWarnings / summariseWarnings are unchanged on every shape" {
+            for a in shapes "a" 1 do
+                let expectedMapWarnings = match a with Success (v, m) -> Success (v, List.map String.length m |> List.map string) | f -> f
+                Expect.equal (Returns.mapWarnings (String.length >> string) a) expectedMapWarnings $"mapWarnings {a}"
+                let expectedFailOn = match a with Success (_, (_ :: _ as m)) -> Failure m | r -> r
+                Expect.equal (Returns.failOnWarnings a) expectedFailOn $"failOnWarnings {a}"
+                let expectedDedupe = match a with Success (v, m) -> Success (v, List.distinct m) | f -> f
+                Expect.equal (Returns.dedupeWarnings a) expectedDedupe $"dedupeWarnings {a}"
+                let expectedSummary =
+                    match a with
+                    | Success (v, m) -> Success (v, m |> List.groupBy id |> List.map (fun (_, g) -> List.head g, g.Length))
+                    | Failure e -> Failure (e |> List.map (fun x -> x, 1))
+                Expect.equal (Returns.summariseWarnings id a) expectedSummary $"summariseWarnings {a}"
+        }
+
+        test "Validation: string length/emptiness validators read string.Length and agree with Seq on other sequences" {
+            let run v (x: 'a) = v "p" x
+            for s in [ ""; " "; "abc"; String.replicate 50 "x"; String.replicate 51 "x" ] do
+                let asSeq = s |> Seq.toList   // same characters, through the generic Seq path
+                Expect.equal (run (hasMaxLengthOf 50) s) (run (hasMaxLengthOf 50) asSeq) $"hasMaxLengthOf {s.Length}"
+                Expect.equal (run (hasMinLengthOf 3) s)  (run (hasMinLengthOf 3) asSeq)  $"hasMinLengthOf {s.Length}"
+                Expect.equal (run (hasLengthOf 3) s)     (run (hasLengthOf 3) asSeq)     $"hasLengthOf {s.Length}"
+                Expect.equal (run isNotEmpty s)          (run isNotEmpty asSeq)          $"isNotEmpty {s.Length}"
+                Expect.equal (run isEmpty s)             (run isEmpty asSeq)             $"isEmpty {s.Length}"
+            Expect.equal (run isNotEmpty (null: string)) (Errors [ { message = "Must not be null"; property = "p"; errorCode = "isNotEmpty" } ]) "null string"
+        }
+
+        test "Validation: inline comparison validators behave as before on ints, floats and strings" {
+            Expect.equal ((isGreaterThan 0.0) "h" 1.8) Ok "float >"
+            Expect.equal ((isGreaterThan 0.0) "h" 0.0) (Errors [ { message = "Must be greater than 0"; property = "h"; errorCode = "isGreaterThan" } ]) "float > fails"
+            Expect.equal ((isLessThan 150) "a" 149) Ok "int <"
+            Expect.equal ((isLessThanOrEqualTo 3) "a" 4) (Errors [ { message = "Must have a maximum value of 3"; property = "a"; errorCode = "isLessThanOrEqualTo" } ]) "int <= fails"
+            Expect.equal ((isEqualTo "x") "s" "x") Ok "string ="
+            Expect.equal ((isNotEqualTo "x") "s" "x") (Errors [ { message = "Must not be equal to x"; property = "s"; errorCode = "isNotEqualTo" } ]) "string <> fails"
+        }
+
+        test "Validation: a validator returning Errors [] still counts as valid (unchanged edge case)" {
+            let v = createValidatorFor<int>() {
+                validate (fun x -> x) [ (fun _ _ -> Errors []) ]
+            }
+            Expect.equal (v 1) Ok "empty error list is Ok"
+        }
+    ]
+
+// ============================================================
 // Entry point
 // ============================================================
 
@@ -2160,6 +2354,7 @@ let main argv =
             returnsWithContextTests
             returnsTraverseVariantsTests
             testingModuleTests
+            performanceEquivalenceTests
             resultExtensionTests
             choiceExtensionTests
             optionExtensionTests

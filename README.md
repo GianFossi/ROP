@@ -32,7 +32,11 @@ This release only adds; code written against 1.0.x compiles unchanged.
 - `traverseListFailFast`, `traverseArray` and `traverseArrayFailFast` complement `traverseList`, which accumulates every failure.
 - `withContextBy` builds breadcrumb trails on failures.
 - `ofPlainResult` and `toPlainResult` convert to and from plain `Result`.
-- `bind` and `>>=` allocate about 4× less per step (see [Zero-allocation paths](#zero-allocation-paths)).
+- Performance, with semantics unchanged:
+  - `bind`, `>>=` and `returns { let! … }` allocate one `Success` per step, 3–4× less than before.
+  - `fold`, `traverseList` and `sequenceList` allocate 2–55× less and run 2–3× faster.
+  - Validating a valid record with the `Validation` DSL allocates about 20× less and runs about 6× faster.
+  - See [Zero-allocation paths](#zero-allocation-paths).
 
 ---
 
@@ -142,7 +146,7 @@ ROP/
 │   └── AllocProbe/            # allocation probe backing ZERO-ALLOC.md (not in ROP.sln)
 ├── Test/
 │   ├── Test.fsproj
-│   └── Program.fs             # Expecto test suite (267+ tests)
+│   └── Program.fs             # Expecto test suite (287+ tests)
 └── Setup/
     └── Setup.vdproj           # legacy Visual Studio Installer project (not part of the build)
 ```
@@ -421,8 +425,15 @@ The full design note is [docs/ZERO-ALLOC.md](docs/ZERO-ALLOC.md). In short:
 | --- | ---: | ---: | ---: | ---: |
 | `Returns.ok x` | 32 B | 32 B | 32 B | 32 B |
 | `ok x >>= s >>= s >>= s`, no warnings | 560 B | 408 B | **128 B** | **128 B** |
-| `returns { let! … ×3 }`, no warnings | 448 B | 349 B | **160 B** | **160 B** |
-| `warnIf` (false) vs `warnIfLazy` (false), interpolated message | 312 B | 312 B | 312 B → **32 B** | 312 B → **32 B** |
+| `returns { let! … ×3 }`, no warnings | 448 B | 349 B | **128 B** | **128 B** |
+| `returns { let! … and! … and! … }` | 288 B | 288 B | **128 B** | **128 B** |
+| `validateAll` ×5 | 440 B | 440 B | **192 B** | **192 B** |
+| `fold`, 100 elements | 5,760 B | 5,760 B | **104 B** | **104 B** |
+| `traverseList`, 100 elements | 12,912 B | 12,912 B | **7,280 B** | **7,280 B** |
+| `Validation` DSL, valid record (7 checks) | 1,096 B | 1,096 B | **56 B** | **56 B** |
+| `warnIf` (false) vs `warnIfLazy` (false), interpolated message | 336 B | 336 B | 336 B → **32 B** | 336 B → **32 B** |
+
+Times improve by similar factors: for example, `fold` over 100 elements drops from 2.0 µs to 0.7 µs, and a `Validation` record from 671 ns to 112 ns. The design note has the full memory and time tables, and the list of what changed; every rewrite is checked against its previous implementation by the test suite.
 
 Since v1.1.0, a clean pipeline costs one `Success` (32 B) per step on both runtimes. That is the minimum for a reference-type union.
 
