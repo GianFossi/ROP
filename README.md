@@ -110,6 +110,7 @@ ROP/
 ├── ROP/
 │   ├── ROP.fsproj
 │   ├── Returns.fs             # core type + operators + `returns { }` CE builder
+│   ├── Testing.fs             # framework-agnostic test assertions (`ROP.Testing`)
 │   ├── Validation.fs          # record/property validator DSL
 │   ├── Result.Extension.fs    # standalone Result<'T,'Error> helpers
 │   ├── Choice.Extension.fs    # standalone Choice<'T,'U> helpers
@@ -120,9 +121,13 @@ ROP/
 │   ├── Examples.Returns.Validation.Parallel.1.fsx
 │   ├── Examples.Returns.Validation.Parallel.2.fsx
 │   └── Examples.Returns.HeatExchanger.fsx
+├── docs/
+│   └── ZERO-ALLOC.md          # hot paths vs ROP: measured costs and the boundary
+├── Bench/
+│   └── AllocProbe/            # allocation probe backing ZERO-ALLOC.md (not in ROP.sln)
 ├── Test/
 │   ├── Test.fsproj
-│   └── Program.fs             # Expecto test suite (234+ tests)
+│   └── Program.fs             # Expecto test suite (267+ tests)
 └── Setup/
     └── Setup.vdproj           # legacy Visual Studio Installer project (not part of the build)
 ```
@@ -144,13 +149,41 @@ ROP/
 
 - Creation: `ok`, `warn`, `warnmany`, `fail`, `failmany`
 - Classification: `isSucceeded`, `isFailure`, `hasWarnings`
-- Conversion: `toOption/ofOption`, `toChoice/ofChoice`, `toResult/ofResult`
+- Conversion: `toOption/ofOption`, `toChoice/ofChoice`, `toResult/ofResult` (Ok carries `value * warnings`), `ofPlainResult/toPlainResult` (plain `Result<'T,'M>` / `Result<'T,'M list>`; **`toPlainResult` discards warnings**)
 - Composition:
   - Sequential: `bind`, `compose`, `>>=`, `>=>`, `<=<`
   - Applicative: `apply`, `map`, `map2`, `map3`, `map4`, `<!>`, `<*>`
   - Parallel: `plus`, `&&&`, `validateAll`
-- Message handling: `jointMessages`, `mapMessages`, `mapWarnings`, `mapErrors`, `warnIf`
-- Collection helpers: `traverseList`, `sequenceList`, `partition`, `zip`, `fold`
+- Message handling: `jointMessages`, `mapMessages`, `mapWarnings`, `mapErrors`, `warnIf`, `warnIfLazy` (message built only when the predicate holds)
+- Warning aggregation: `dedupeWarnings` (drop repeats, keep first-occurrence order), `summariseWarnings` (group by key, with counts)
+- Failure provenance: `withContextBy` (annotate every error with a context label, building a breadcrumb trail)
+- Collection helpers: `partition`, `zip`, `fold`, and the traversals:
+
+  | | Accumulates every failure (validation) | Stops at the first failure (sequential computation) |
+  | --- | --- | --- |
+  | list | `traverseList`, `sequenceList` | `traverseListFailFast` |
+  | array | `traverseArray` | `traverseArrayFailFast` |
+
+  The array forms write into a pre-sized array instead of building and reversing an intermediate list.
+
+#### Testing helpers (`ROP.Testing`)
+
+Assertion helpers that don't depend on any test framework. On a mismatch they raise a plain exception whose message renders **every** message in the container, which xUnit, NUnit and Expecto all report as a failure:
+
+```fsharp
+open ROP.Testing
+
+getOrFail r                                 // value, or fail with every error listed
+getWithWarnings r                           // value * warnings
+expectFailure r                             // the error list
+expectFailureMatching (function NotFound _ -> true | _ -> false) r
+expectWarningMatching ((=) Extrapolated) r  // value, if some warning matches
+expectNoWarnings r                          // value, if a Success with no warnings
+```
+
+#### Hot paths
+
+Code that must not allocate per evaluation (per node, per iteration) should not use `Returns`. Use struct state with a flags enum there, and convert to `Returns` once per solve. See [docs/ZERO-ALLOC.md](docs/ZERO-ALLOC.md) for measured costs, the reasoning against a struct variant, and the boundary pattern.
 
 ---
 
@@ -429,8 +462,8 @@ Trusted Publishing currently only covers GitHub Actions — publishing from the 
 dotnet build ROP.sln --configuration Release
 dotnet run --project Test/Test.fsproj --configuration Release
 
-# 2. Pack, specifying the version explicitly (the .fsproj has no <Version>,
-#    so it defaults to 1.0.0 if you omit -p:PackageVersion)
+# 2. Pack, specifying the version explicitly (-p:PackageVersion overrides the
+#    <Version> in the .fsproj, which is only the fallback for local packs)
 dotnet pack ROP/ROP.fsproj --configuration Release -p:PackageVersion=1.2.3 --output ./nupkgs
 
 # 3. Push to NuGet.org with your API key

@@ -1812,6 +1812,229 @@ let integrationTests =
     ]
 
 // ============================================================
+// v1.1.0 additions
+// ============================================================
+
+let returnsWarnIfLazyTests =
+    testList "Returns - warnIfLazy" [
+
+        test "warnIfLazy does not build the message when the predicate is false" {
+            let calls = ref 0
+            let r = Returns.ok 1 |> Returns.warnIfLazy (fun v -> v > 3) (fun () -> calls.Value <- calls.Value + 1; "w")
+            Expect.equal calls.Value 0 "thunk never invoked"
+            Expect.equal r (Returns.ok 1) "input unchanged"
+        }
+
+        test "warnIfLazy does not build the message on a Failure" {
+            let calls = ref 0
+            let r = Returns.fail "err" |> Returns.warnIfLazy (fun _ -> true) (fun () -> calls.Value <- calls.Value + 1; "w")
+            Expect.equal calls.Value 0 "thunk never invoked"
+            Expect.equal (failureMessages r) ["err"] "error unchanged"
+        }
+
+        test "warnIfLazy builds the message exactly once when the predicate is true" {
+            let calls = ref 0
+            let r = Returns.ok 5 |> Returns.warnIfLazy (fun v -> v > 3) (fun () -> calls.Value <- calls.Value + 1; "w")
+            Expect.equal calls.Value 1 "thunk invoked once"
+            Expect.equal r (Returns.ok 5 |> Returns.warnIf (fun v -> v > 3) "w") "same result as warnIf"
+        }
+
+        test "warnIfLazy matches warnIf on existing warnings" {
+            let input = Returns.warn "w1" 5
+            Expect.equal
+                (input |> Returns.warnIfLazy (fun v -> v > 3) (fun () -> "w2"))
+                (input |> Returns.warnIf (fun v -> v > 3) "w2")
+                "same result as warnIf"
+        }
+    ]
+
+let returnsPlainResultTests =
+    testList "Returns - ofPlainResult / toPlainResult" [
+
+        test "ofPlainResult wraps Ok into a warning-free Success" {
+            Expect.equal (Returns.ofPlainResult (Result.Ok 5) : Returns<int,string>) (Success (5, [])) "clean Success"
+        }
+
+        test "ofPlainResult wraps Error into a single-error Failure" {
+            Expect.equal (Returns.ofPlainResult (Result.Error "e") : Returns<int,string>) (Failure ["e"]) "single error"
+        }
+
+        test "toPlainResult discards warnings" {
+            Expect.equal (Returns.toPlainResult (Returns.warn "w" 3)) (Result.Ok 3) "warnings dropped"
+        }
+
+        test "toPlainResult keeps every error" {
+            let r : Returns<int,string> = Returns.failmany ["e1"; "e2"]
+            Expect.equal (Returns.toPlainResult r) (Result.Error ["e1"; "e2"]) "all errors kept"
+        }
+
+        test "ofPlainResult then toPlainResult round-trips Ok" {
+            let r : Result<int,string> = Result.Ok 7
+            Expect.equal (r |> Returns.ofPlainResult |> Returns.toPlainResult) (Result.Ok 7) "round trip"
+        }
+    ]
+
+let returnsAggregationTests =
+    testList "Returns - dedupeWarnings / summariseWarnings" [
+
+        test "dedupeWarnings removes duplicates, preserving first-occurrence order" {
+            let r = Returns.warnmany ["b"; "a"; "b"; "c"; "a"; "b"] 1 |> Returns.dedupeWarnings
+            Expect.equal r (Success (1, ["b"; "a"; "c"])) "order of first occurrences kept"
+        }
+
+        test "dedupeWarnings leaves a Failure unchanged, duplicates included" {
+            let r : Returns<int,string> = Returns.failmany ["e"; "e"] |> Returns.dedupeWarnings
+            Expect.equal r (Failure ["e"; "e"]) "errors untouched"
+        }
+
+        test "summariseWarnings counts warnings per key, keeping the first warning of each key" {
+            let r =
+                Returns.warnmany [ ("range", 1); ("range", 2); ("mesh", 3); ("range", 4) ] 0
+                |> Returns.summariseWarnings fst
+            Expect.equal r (Success (0, [ (("range", 1), 3); (("mesh", 3), 1) ])) "grouped by key with counts"
+        }
+
+        test "summariseWarnings tolerates keys that are null at runtime (unit, None)" {
+            let r = Returns.warnmany ["a"; "b"] 0 |> Returns.summariseWarnings (fun _ -> ())
+            Expect.equal r (Success (0, [ ("a", 2) ])) "single group"
+        }
+
+        test "summariseWarnings pairs each error of a Failure with 1" {
+            let r : Returns<int,string * int> = Returns.failmany ["e"; "e"] |> Returns.summariseWarnings id
+            Expect.equal r (Failure [ ("e", 1); ("e", 1) ]) "errors not collapsed"
+        }
+    ]
+
+let returnsWithContextTests =
+    testList "Returns - withContextBy" [
+
+        let inContext (ctx: string) (m: string) = $"{ctx} > {m}"
+
+        test "withContextBy annotates every error" {
+            let r : Returns<int,string> = Returns.failmany ["e1"; "e2"] |> Returns.withContextBy inContext "load"
+            Expect.equal r (Failure ["load > e1"; "load > e2"]) "all errors annotated"
+        }
+
+        test "withContextBy leaves a Success and its warnings unchanged" {
+            let r = Returns.warn "w" 1 |> Returns.withContextBy inContext "load"
+            Expect.equal r (Success (1, ["w"])) "unchanged"
+        }
+
+        test "withContextBy builds a breadcrumb trail, outermost label outermost" {
+            let step (_: int) : Returns<int,string> = Returns.fail "negative"
+            let inner x = step x |> Returns.withContextBy inContext "node 3"
+            let outer x = Returns.ok x >>= inner |> Returns.withContextBy inContext "march"
+            Expect.equal (outer 1) (Failure ["march > node 3 > negative"]) "breadcrumb trail"
+        }
+    ]
+
+let returnsTraverseVariantsTests =
+    // Fails on odd numbers, warns on every element.
+    let check (x: int) : Returns<int,string> =
+        if x % 2 = 0 then Returns.warn $"w{x}" (x * 10) else Returns.fail $"odd {x}"
+
+    testList "Returns - traverseList / traverseListFailFast / traverseArray / traverseArrayFailFast" [
+
+        test "traverseList accumulates all failures, traverseListFailFast stops at the first" {
+            let inputs = [1; 2; 3; 4; 5]
+            Expect.equal (Returns.traverseList check inputs) (Failure ["odd 1"; "odd 3"; "odd 5"]) "three errors"
+            Expect.equal (Returns.traverseListFailFast check inputs) (Failure ["odd 1"]) "one error"
+        }
+
+        test "traverseListFailFast does not invoke the function after the first failure" {
+            let visited = ResizeArray()
+            let f x = visited.Add x; check x
+            Returns.traverseListFailFast f [2; 4; 5; 6; 7] |> ignore
+            Expect.equal (List.ofSeq visited) [2; 4; 5] "stopped at 5"
+        }
+
+        test "traverseListFailFast keeps earlier warnings, followed by the failing element's errors" {
+            Expect.equal (Returns.traverseListFailFast check [2; 4; 5; 6]) (Failure ["w2"; "w4"; "odd 5"]) "warnings then error"
+        }
+
+        test "traverseListFailFast matches traverseList on all-success input" {
+            let inputs = [2; 4; 6]
+            Expect.equal (Returns.traverseListFailFast check inputs) (Returns.traverseList check inputs) "same result"
+            Expect.equal (Returns.traverseListFailFast check inputs) (Success ([20; 40; 60], ["w2"; "w4"; "w6"])) "values and warnings in order"
+        }
+
+        test "traverseArray accumulates all failures, traverseArrayFailFast stops at the first" {
+            let inputs = [| 1; 2; 3; 4; 5 |]
+            Expect.equal (Returns.traverseArray check inputs) (Failure ["odd 1"; "odd 3"; "odd 5"]) "three errors"
+            Expect.equal (Returns.traverseArrayFailFast check inputs) (Failure ["odd 1"]) "one error"
+        }
+
+        test "traverseArray and traverseArrayFailFast match their list counterparts" {
+            for inputs in [ []; [2; 4; 6]; [2; 3; 4; 5]; [1] ] do
+                let arr = Array.ofList inputs
+                Expect.equal (Returns.traverseArray check arr |> Returns.map List.ofArray) (Returns.traverseList check inputs) $"accumulating: {inputs}"
+                Expect.equal (Returns.traverseArrayFailFast check arr |> Returns.map List.ofArray) (Returns.traverseListFailFast check inputs) $"fail-fast: {inputs}"
+        }
+    ]
+
+let testingModuleTests =
+    // Runs an assertion that is expected to throw, and returns the exception message.
+    let messageOf (f: unit -> 'a) =
+        try f () |> ignore; failtest "Expected an exception" with
+        | e when not (e :? Expecto.AssertException) -> e.Message
+
+    testList "Testing - assertion helpers" [
+
+        test "getOrFail returns the Success value" {
+            Expect.equal (Testing.getOrFail (Returns.warn "w" 3)) 3 "value"
+        }
+
+        test "getOrFail renders every error message on Failure" {
+            let msg = messageOf (fun () -> Testing.getOrFail (Returns.failmany ["first"; "second"; "third"] : Returns<int,string>))
+            for part in ["3 error(s)"; "[1] first"; "[2] second"; "[3] third"] do
+                Expect.stringContains msg part $"message contains {part}"
+        }
+
+        test "getWithWarnings returns the value and warnings" {
+            Expect.equal (Testing.getWithWarnings (Returns.warnmany ["a"; "b"] 3)) (3, ["a"; "b"]) "value and warnings"
+        }
+
+        test "getWithWarnings throws on Failure" {
+            let msg = messageOf (fun () -> Testing.getWithWarnings (Returns.fail "boom" : Returns<int,string>))
+            Expect.stringContains msg "boom" "error rendered"
+        }
+
+        test "expectFailure returns the errors, and throws on Success" {
+            Expect.equal (Testing.expectFailure (Returns.failmany ["e1"; "e2"] : Returns<int,string>)) ["e1"; "e2"] "errors"
+            let msg = messageOf (fun () -> Testing.expectFailure (Returns.warn "w" 42))
+            Expect.stringContains msg "42" "value rendered"
+            Expect.stringContains msg "[1] w" "warning rendered"
+        }
+
+        test "expectFailureMatching passes when any error matches" {
+            Testing.expectFailureMatching ((=) "e2") (Returns.failmany ["e1"; "e2"] : Returns<int,string>)
+        }
+
+        test "expectFailureMatching throws when no error matches, rendering all of them" {
+            let msg = messageOf (fun () -> Testing.expectFailureMatching ((=) "zzz") (Returns.failmany ["e1"; "e2"] : Returns<int,string>))
+            Expect.stringContains msg "[1] e1" "first error rendered"
+            Expect.stringContains msg "[2] e2" "second error rendered"
+        }
+
+        test "expectFailureMatching throws on Success" {
+            messageOf (fun () -> Testing.expectFailureMatching (fun _ -> true) (Returns.ok 1 : Returns<int,string>)) |> ignore
+        }
+
+        test "expectWarningMatching returns the value when a warning matches, and throws otherwise" {
+            Expect.equal (Testing.expectWarningMatching ((=) "b") (Returns.warnmany ["a"; "b"] 7)) 7 "value"
+            messageOf (fun () -> Testing.expectWarningMatching ((=) "z") (Returns.warnmany ["a"; "b"] 7)) |> ignore
+            messageOf (fun () -> Testing.expectWarningMatching (fun _ -> true) (Returns.fail "e" : Returns<int,string>)) |> ignore
+        }
+
+        test "expectNoWarnings returns the value of a clean Success, and throws otherwise" {
+            Expect.equal (Testing.expectNoWarnings (Returns.ok 9 : Returns<int,string>)) 9 "value"
+            let msg = messageOf (fun () -> Testing.expectNoWarnings (Returns.warn "careful" 9))
+            Expect.stringContains msg "careful" "warning rendered"
+            messageOf (fun () -> Testing.expectNoWarnings (Returns.fail "e" : Returns<int,string>)) |> ignore
+        }
+    ]
+
+// ============================================================
 // Entry point
 // ============================================================
 
@@ -1847,6 +2070,12 @@ let main argv =
             returnsMapWarningsErrorsTests
             returnsValidateAllTests
             returnsAndBangTests
+            returnsWarnIfLazyTests
+            returnsPlainResultTests
+            returnsAggregationTests
+            returnsWithContextTests
+            returnsTraverseVariantsTests
+            testingModuleTests
             resultExtensionTests
             choiceExtensionTests
             optionExtensionTests
