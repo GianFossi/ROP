@@ -7,10 +7,12 @@
     <Authors>Gian-Luca ANFOSSI</Authors>
     <Company>Ganfoss</Company>
     <PackageId>Ganfoss.ROP</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Description>An F# library implementing Railway-Oriented Programming around a custom Returns type that tracks warnings alongside success values.</Description>
     <PackageTags>fsharp;railway-oriented-programming;functional;validation;result</PackageTags>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/GianFossi/ROP</PackageProjectUrl>
     <RepositoryUrl>https://github.com/GianFossi/ROP</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -18,6 +20,10 @@
 
   <ItemGroup>
     <Content Include="ROP.ico" />
+    <None Include="..\README.md">
+      <Pack>True</Pack>
+      <PackagePath></PackagePath>
+    </None>
     <None Include="..\LICENSE">
       <Pack>True</Pack>
       <PackagePath></PackagePath>

@@ -58,7 +58,9 @@ type Returns<'TSuccess, 'TMessage> =
     override this.ToString() =
         // Renders a message list as a single "; "-separated string, calling each message's own ToString().
         let printMsgs msgs =
-            msgs |> List.map (fun x -> x.ToString()) |> String.concat "; "
+            // Null-safe: a null message (e.g. a null string) renders as an empty string instead of throwing a
+            // NullReferenceException from inside ToString, which would hide the original result in logs.
+            msgs |> List.map (fun x -> match box x with null -> "" | o -> o.ToString()) |> String.concat "; "
         match this with
         // %A performs structural (reflection-based) formatting of the value, which is more informative than
         // %O for arbitrary record/tuple/list success values (at the cost of some reflection overhead) -
@@ -115,6 +117,15 @@ module Returns =
     /// <param name="message">Warning message to append when the predicate is true.</param>
     /// <param name="returns">The input <c>Returns</c> (result) type.</param>
     /// <returns>The input with <paramref name="message"/> appended to its warnings when the predicate matches; otherwise the input unchanged.</returns>
+    /// <remarks>
+    /// Appending to the end of an immutable list copies it, so each call costs O(number of warnings already present).
+    /// That is negligible in a pipeline, but calling <c>warnIf</c> thousands of times on the SAME accumulating value
+    /// (e.g. in a loop) is quadratic: 20,000 calls allocate about 6 GB. In a loop that threads a state (a marching
+    /// solver), use <see cref="foldSteps"/> with <c>warnIf</c>/<c>warnIfLazy</c> inside the step, which is linear and
+    /// keeps the warnings in chronological order; without a state, produce one <c>Returns</c> per item and combine
+    /// them with <c>traverseList</c>/<c>traverseArray</c>, <c>validateAll</c> or a <c>for</c> loop inside
+    /// <c>returns { }</c>.
+    /// </remarks>
     let warnIf (predicate: 'TSuccess -> bool) (message: 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
         match returns with
         // Only a Success whose value satisfies the predicate gets the new warning appended; every other
@@ -160,6 +171,43 @@ module Returns =
         | Success (value, msgs) when predicate value -> Success (value, msgs @ [buildMessage value])
         | _ -> returns
 
+    /// <summary>
+    /// Post-condition check: turns a Success into a Failure when the predicate does NOT hold for its value.
+    /// Successes that satisfy the predicate, and Failures, are propagated unchanged.
+    /// </summary>
+    /// <remarks>
+    /// Like a failing step in a <c>&gt;&gt;=</c> chain, the warnings collected so far are kept: the Failure carries
+    /// <paramref name="message"/> followed by the former warnings, so a range check after a calculation does not
+    /// hide the caveats raised during it. The message is an already-built value (evaluated even when the check
+    /// passes); use <see cref="filterWith"/> when building it is expensive.
+    /// </remarks>
+    /// <param name="predicate">The condition the Success value must satisfy to stay a Success.</param>
+    /// <param name="message">The error message used when the predicate does not hold.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The input unchanged when it is a Failure or its value satisfies the predicate; otherwise a Failure of <paramref name="message"/> followed by the former warnings.</returns>
+    let inline filter (predicate: 'TSuccess -> bool) (message: 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success (value, msgs) when not (predicate value) -> Failure (message :: msgs)
+        | _ -> returns
+
+    /// <summary>
+    /// Lazy, value-aware variant of <see cref="filter"/>: turns a Success into a Failure when the predicate does NOT
+    /// hold, building the error message from the value only in that case.
+    /// </summary>
+    /// <remarks>
+    /// Avoids the eager-argument trap of <c>filter</c> (see <see cref="warnIfLazy"/>): the message, typically an
+    /// interpolated string mentioning the offending value, is built only when the check fails. The warnings collected
+    /// so far are kept after the error, as in <see cref="filter"/>.
+    /// </remarks>
+    /// <param name="predicate">The condition the Success value must satisfy to stay a Success.</param>
+    /// <param name="buildMessage">Builds the error message from the offending value; invoked only when the predicate is false.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The input unchanged when it is a Failure or its value satisfies the predicate; otherwise a Failure of the built message followed by the former warnings.</returns>
+    let inline filterWith (predicate: 'TSuccess -> bool) (buildMessage: 'TSuccess -> 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Success (value, msgs) when not (predicate value) -> Failure (buildMessage value :: msgs)
+        | _ -> returns
+
     // -------------------------------------------------------------------------------------- //
 
     /// <summary>
@@ -195,6 +243,23 @@ module Returns =
       // List.isEmpty is a case check; `msgs <> []` went through (much slower) generic structural equality.
       | Success (_, msgs) when not (List.isEmpty msgs) -> Failure msgs
       | _ -> returns
+
+    /// <summary>
+    /// Error recovery: hands the errors of a Failure to a compensation function, whose result (a fallback Success,
+    /// or a different Failure) replaces it. Successes are propagated unchanged and the function is not invoked.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="defaultValue"/>/<see cref="defaultWith"/>, which leave the railway and return a bare value,
+    /// <c>recover</c> stays on it: the fallback can carry a warning saying that it is one (for example
+    /// <c>Returns.recover (fun errs -&gt; Returns.warn (UsedDefault errs) 0.0)</c>), so the substitution is not silent.
+    /// </remarks>
+    /// <param name="compensation">Receives the error messages and returns the replacement <c>Returns</c>.</param>
+    /// <param name="returns">The input <c>Returns</c> (result) type.</param>
+    /// <returns>The input unchanged when it is a Success; otherwise the result of <paramref name="compensation"/>.</returns>
+    let inline recover (compensation: 'TMessage list -> Returns<'TSuccess,'TMessage>) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
+        match returns with
+        | Failure errs -> compensation errs
+        | Success _    -> returns
 
     // -------------------------------------------------------------------------------------- //
 
@@ -878,6 +943,39 @@ module Returns =
         if succeeding then Success (current, List.rev msgsRev)
         else Failure (List.rev msgsRev)
 
+    /// <summary>
+    /// Threads a state through a sequence of items, one sequential step per item (a monadic fold, "foldM"): each step
+    /// receives the current state and the next item and returns the next state as a <c>Returns</c>, possibly with
+    /// warnings. STOPS AT THE FIRST FAILING STEP; the remaining items are not visited.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the linear way to write a marching/iterative calculation that raises warnings along the way. The
+    /// tempting alternative, re-assigning one accumulated value in a loop (<c>r &lt;- r |&gt; Returns.warnIf ...</c>),
+    /// copies the whole warning list on every append and is quadratic: 20,000 steps allocate about 6 GB. Here each
+    /// warning is added once, whatever the number of steps.</para>
+    /// <para>Warnings come out in chronological order (step 1's first), like a <c>for</c> loop inside
+    /// <c>returns { }</c> and unlike a hand-written chain of <c>&gt;&gt;=</c>, which puts each later step's warnings in
+    /// front. On failure, the Failure carries the warnings of the earlier steps followed by the failing step's errors.</para>
+    /// </remarks>
+    /// <param name="step">Computes the next state from the current state and an item.</param>
+    /// <param name="initial">The state before the first item.</param>
+    /// <param name="items">The items to step through, in order.</param>
+    /// <returns>A Success of the final state with every step's warnings in order, or a Failure with the earlier warnings followed by the first failing step's errors.</returns>
+    let inline foldSteps (step: 'State -> 'T -> Returns<'State,'TMessage>) (initial: 'State) (items: 'T seq) : Returns<'State,'TMessage> =
+        use e = items.GetEnumerator()
+        let mutable state = initial
+        let mutable msgsRev : 'TMessage list = []
+        let mutable failure = None
+        while failure.IsNone && e.MoveNext() do
+            match step state e.Current with
+            | Success (next, msgs) ->
+                state <- next
+                for m in msgs do msgsRev <- m :: msgsRev
+            | Failure errs -> failure <- Some (Failure (List.rev msgsRev @ errs))
+        match failure with
+        | Some f -> f
+        | None   -> Success (state, List.rev msgsRev)
+
     // -------------------------------------------------------------------------------------- //
 
     // ********************
@@ -1421,6 +1519,15 @@ type ReturnsBuilder() =
     /// <param name="returns">The <c>Returns</c> value to pass through unchanged.</param>
     /// <returns><paramref name="returns"/>, unchanged.</returns>
     member inline _.Source(returns: Returns<_, _>) : Returns<_, _> = returns
+
+    /// <summary>
+    /// Identity hook for the sequence of a <c>for x in xs do ...</c> loop. Once a builder defines <c>Source</c>, the
+    /// compiler applies it to <c>for</c> sequences too; without this overload, <c>for</c> loops inside
+    /// <c>returns { }</c> did not compile.
+    /// </summary>
+    /// <param name="source">The sequence being iterated.</param>
+    /// <returns><paramref name="source"/>, unchanged.</returns>
+    member inline _.Source(source: seq<'T>) : seq<'T> = source
 
     /// <summary>Implements <c>let! x = m in ...</c>: sequential (short-circuiting) binding.</summary>
     /// <param name="m">The <c>Returns</c> value being bound.</param>

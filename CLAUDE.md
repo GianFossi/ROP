@@ -12,6 +12,10 @@ dotnet build ROP.sln
 dotnet run --project Test/Test.fsproj --framework net8.0
 dotnet run --project Test/Test.fsproj --framework net10.0
 
+# Load tests (Test/Performance.fs) run with the suite; they print "[perf]" lines and check time/memory budgets.
+# ROP_PERF_TIME_SCALE=3 relaxes time budgets on slow machines; ROP_PERF_SKIP=1 skips them.
+ROP_PERF_SKIP=1 dotnet run --project Test/Test.fsproj --framework net8.0
+
 # Run tests matching a name fragment (Expecto --filter)
 dotnet run --project Test/Test.fsproj --framework net8.0 -- --filter "Returns - bind"
 
@@ -41,8 +45,9 @@ An F# library (multi-targets .NET 8 LTS and .NET 10) implementing Railway-Orient
   - *Sequential* (short-circuit on first failure): `>>=` (bind), `>=>` / `<=<` (Kleisli)
   - *Applicative*: `<!>` (map), `<*>` (apply)
   - *Parallel* (accumulate all failures): `&&&`, `validateAll`
-  - *Collection*: `traverseList`/`traverseArray` (accumulate all failures), `traverseListFailFast`/`traverseArrayFailFast` (stop at the first), `sequenceList`, `partition`, `fold`
-  - *Warnings/context*: `warnIfLazy`, `dedupeWarnings`, `summariseWarnings`, `withContextBy`
+  - *Collection*: `traverseList`/`traverseArray` (accumulate all failures), `traverseListFailFast`/`traverseArrayFailFast` (stop at the first), `sequenceList`, `partition`, `fold`, `foldSteps` (state threaded through items, linear — use it instead of re-applying `warnIf` to one accumulating value, which is quadratic)
+  - *Warnings/context*: `warnIfLazy`, `warnIfWith`, `dedupeWarnings`, `summariseWarnings`, `withContextBy`
+  - *Post-conditions/recovery*: `filter`, `filterWith`, `recover`
 
 - **`Testing.fs`** — `ROP.Testing`: framework-agnostic assertions for tests (`getOrFail`, `expectFailure`, `expectNoWarnings`, ...); failures raise a plain exception rendering every message.
 

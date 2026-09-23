@@ -691,6 +691,13 @@ let returnsActivePatternTests =
 let returnsToStringTests =
     testList "Returns - ToString" [
 
+        test "ToString does not throw on null messages" {
+            let r : Returns<int,string> = Returns.failmany [ "e1"; null; "e3" ]
+            Expect.equal (r.ToString()) "Failure: e1; ; e3" "null rendered as empty"
+            let w : Returns<int,string> = Success (1, [ null ])
+            Expect.stringStarts (w.ToString()) "Success: 1" "no exception on a null warning"
+        }
+
         test "Success with no messages has correct string format" {
             let r = Returns.ok 42
             let s = r.ToString()
@@ -1899,6 +1906,47 @@ let integrationTests =
 // v1.1.0 additions
 // ============================================================
 
+let returnsBuilderForLoopTests =
+    testList "ReturnsBuilder - for loops" [
+
+        test "for over a list collects the warnings of every iteration, in order" {
+            let r = returns {
+                for x in [ 1; 2; 3; 4 ] do
+                    do! (if x % 2 = 0 then Returns.warn $"even {x}" () else Returns.ok ())
+            }
+            Expect.equal r (Success ((), [ "even 2"; "even 4" ])) "warnings in iteration order"
+        }
+
+        test "for stops at the first failing iteration, keeping earlier warnings before the errors" {
+            let visited = ResizeArray()
+            let r = returns {
+                for x in [ 1; 2; 3; 4 ] do
+                    visited.Add x
+                    do! (if x = 3 then Returns.fail "three" elif x = 2 then Returns.warn "two" () else Returns.ok ())
+            }
+            Expect.equal r (Failure [ "two"; "three" ]) "earlier warnings, then the error"
+            Expect.equal (List.ofSeq visited) [ 1; 2; 3 ] "iteration 4 never runs"
+        }
+
+        test "for over an array, a range and an empty sequence" {
+            let total = ref 0
+            let r1 = returns { for x in [| 1; 2; 3 |] do total.Value <- total.Value + x }
+            let r2 = returns { for x in 1 .. 4 do total.Value <- total.Value + x }
+            let r3 : Returns<unit,string> = returns { for _ in Seq.empty<int> do () }
+            Expect.equal (r1, r2, r3) (Success ((), []), Success ((), []), Success ((), [])) "all succeed"
+            Expect.equal total.Value 16 "every element visited"
+        }
+
+        test "for followed by return in the same block" {
+            let r = returns {
+                for x in [ 1; 2 ] do
+                    do! Returns.warn $"w{x}" ()
+                return 42
+            }
+            Expect.equal r (Success (42, [ "w1"; "w2" ])) "loop warnings carried to the result"
+        }
+    ]
+
 let returnsWarnIfLazyTests =
     testList "Returns - warnIfLazy" [
 
@@ -2119,6 +2167,666 @@ let testingModuleTests =
     ]
 
 // ============================================================
+// v1.2.0: filter / recover (from the unmerged 2026-05 review branch)
+// ============================================================
+
+
+let returnsFilterTests =
+    testList "Returns - filter" [
+
+        test "filter passes Success when predicate holds" {
+            let r = Returns.ok 10 |> Returns.filter (fun v -> v > 5) "too small"
+            Expect.isTrue (isSuccess r) "should remain Success"
+            Expect.equal (successValue r) 10 "value unchanged"
+        }
+
+        test "filter converts Success to Failure when predicate does not hold" {
+            let r = Returns.ok 3 |> Returns.filter (fun v -> v > 5) "too small"
+            Expect.isTrue (isFailure r) "should be Failure"
+            Expect.equal (failureMessages r) ["too small"] "error message set"
+        }
+
+        test "filter keeps earlier warnings after the error, like a failing >>= step" {
+            let r = Returns.warn "w" 3 |> Returns.filter (fun v -> v > 5) "too small"
+            Expect.equal r (Failure ["too small"; "w"]) "error first, then the former warnings"
+            Expect.equal r (Returns.warn "w" 3 >>= (fun _ -> Returns.fail "too small")) "same as a failing bind"
+        }
+
+        test "filterWith builds the message from the value, only when the check fails" {
+            let calls = ref 0
+            let build v = calls.Value <- calls.Value + 1; $"{v} is too small"
+            let passed = Returns.warn "w" 10 |> Returns.filterWith (fun v -> v > 5) build
+            Expect.equal passed (Success (10, ["w"])) "passes unchanged"
+            Expect.equal calls.Value 0 "builder not invoked when the check passes"
+            let failed = Returns.warn "w" 3 |> Returns.filterWith (fun v -> v > 5) build
+            Expect.equal failed (Failure ["3 is too small"; "w"]) "built message, then former warnings"
+            Expect.equal calls.Value 1 "builder invoked once"
+            let already = Returns.fail "e" |> Returns.filterWith (fun _ -> false) build
+            Expect.equal already (Failure ["e"]) "Failure unchanged"
+            Expect.equal calls.Value 1 "builder not invoked on a Failure"
+        }
+
+        test "filter propagates Failure unchanged" {
+            let r = Returns.fail "original" |> Returns.filter (fun _ -> true) "never"
+            Expect.equal (failureMessages r) ["original"] "original error preserved"
+        }
+
+        test "filter can be chained with bind" {
+            let r =
+                Returns.ok 10
+                |> Returns.bind (fun v -> Returns.ok (v * 2))
+                |> Returns.filter (fun v -> v < 100) "result too large"
+            Expect.equal (successValue r) 20 "value correct"
+        }
+    ]
+
+let returnsRecoverTests =
+    testList "Returns - recover" [
+
+        test "recover converts Failure to Success via compensation" {
+            let r = Returns.fail "err" |> Returns.recover (fun _ -> Returns.ok 0)
+            Expect.isTrue (isSuccess r) "should be Success after recovery"
+            Expect.equal (successValue r) 0 "recovered value"
+        }
+
+        test "recover receives the error messages list" {
+            let r = Returns.failmany ["e1";"e2"] |> Returns.recover (fun errs -> Returns.ok (List.length errs))
+            Expect.equal (successValue r) 2 "error count used as recovered value"
+        }
+
+        test "recover passes Success through unchanged" {
+            let r = Returns.warn "w" 99 |> Returns.recover (fun _ -> Returns.ok 0)
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 99 "original value preserved"
+                Expect.equal msgs ["w"] "original warning preserved"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "recover can return a new Failure from compensation" {
+            let r = Returns.fail "original" |> Returns.recover (fun errs -> Returns.fail (sprintf "recovered: %s" errs.[0]))
+            Expect.equal (failureMessages r) ["recovered: original"] "compensation failure propagated"
+        }
+
+        test "recover is useful as fallback in a pipeline" {
+            let parse (s: string) =
+                match System.Int32.TryParse(s) with
+                | true, v -> Returns.ok v
+                | _       -> Returns.fail (sprintf "cannot parse '%s'" s)
+            let r = parse "bad" |> Returns.recover (fun _ -> Returns.ok -1)
+            Expect.equal (successValue r) -1 "fallback value used"
+        }
+
+        test "recover does not invoke the compensation on Success" {
+            let calls = ref 0
+            Returns.ok 1 |> Returns.recover (fun _ -> calls.Value <- calls.Value + 1; Returns.ok 0) |> ignore
+            Expect.equal calls.Value 0 "compensation not invoked"
+        }
+
+        test "recover can flag the fallback with a warning instead of hiding it" {
+            let r = Returns.fail "sensor offline" |> Returns.recover (fun errs -> Returns.warn ("used default: " + String.concat "; " errs) 20.0)
+            Expect.equal r (Success (20.0, ["used default: sensor offline"])) "fallback value with an explanatory warning"
+        }
+    ]
+
+// ============================================================
+// Coverage tests ported from the unmerged 2026-05 review branch
+// ============================================================
+// These tests use Result's Ok/Error, which `open ROP.Validation` (ValidationState.Ok) shadows at file level;
+// re-opening FSharp.Core inside this module restores them. (In the original branch they never compiled.)
+module Ported =
+    open Microsoft.FSharp.Core
+
+    // ============================================================
+    // Returns - traverseList / sequenceList
+    // ============================================================
+
+    let returnsTraverseListTests =
+        testList "Returns - traverseList / sequenceList" [
+
+            test "traverseList maps all successes into a list in order" {
+                let r = Returns.traverseList (fun x -> Returns.ok (x * 2)) [1;2;3]
+                Expect.equal (successValue r) [2;4;6] "values doubled and ordered"
+            }
+
+            test "traverseList accumulates ALL failures (no short-circuit)" {
+                let f x = if x > 0 then Returns.ok x else Returns.fail (sprintf "bad:%d" x)
+                let r = Returns.traverseList f [1; -1; 2; -2]
+                Expect.isTrue (isFailure r) "should be Failure"
+                Expect.equal (failureMessages r) ["bad:-1";"bad:-2"] "both errors collected"
+            }
+
+            test "traverseList merges warnings from all successful elements" {
+                let f x = Returns.warn (sprintf "w%d" x) (x * 10)
+                let r = Returns.traverseList f [1;2;3]
+                match r with
+                | Success (vs, msgs) ->
+                    Expect.equal vs [10;20;30] "values mapped"
+                    Expect.equal msgs ["w1";"w2";"w3"] "all warnings merged in order"
+                | _ -> failtest "Expected Success"
+            }
+
+            test "traverseList on empty list returns Success of empty list" {
+                let r = Returns.traverseList Returns.ok ([] : int list)
+                match r with
+                | Success (vs, []) -> Expect.equal vs [] "empty list"
+                | _ -> failtest "Expected Success []"
+            }
+
+            test "sequenceList sequences all successes into a list" {
+                let items = [ Returns.ok 1; Returns.ok 2; Returns.ok 3 ]
+                let r = Returns.sequenceList items
+                Expect.equal (successValue r) [1;2;3] "should be [1;2;3]"
+            }
+
+            test "sequenceList accumulates failures from multiple elements" {
+                let items : Returns<int,string> list =
+                    [ Returns.ok 1; Returns.fail "e1"; Returns.ok 3; Returns.fail "e2" ]
+                let r = Returns.sequenceList items
+                Expect.equal (failureMessages r) ["e1";"e2"] "both errors collected"
+            }
+
+            test "sequenceList merges warnings from all elements" {
+                let items = [ Returns.warn "w1" 1; Returns.ok 2; Returns.warn "w2" 3 ]
+                let r = Returns.sequenceList items
+                match r with
+                | Success (vs, msgs) ->
+                    Expect.equal vs [1;2;3] "values preserved"
+                    Expect.equal msgs ["w1";"w2"] "warnings merged"
+                | _ -> failtest "Expected Success"
+            }
+        ]
+
+    // ============================================================
+    // Returns - log
+    // ============================================================
+
+    let returnsLogTests =
+        testList "Returns - log" [
+
+            test "log calls logger with Success message when record is true" {
+                let mutable logged = ""
+                let r = Returns.ok 42 |> Returns.log (fun s -> logged <- s) true "step"
+                Expect.stringContains logged "Success" "logged message mentions Success"
+                Expect.stringContains logged "step" "logged message contains label"
+                Expect.equal (successValue r) 42 "returns propagated unchanged"
+            }
+
+            test "log calls logger with Failure message when record is true" {
+                let mutable logged = ""
+                let r = Returns.fail "err" |> Returns.log (fun s -> logged <- s) true "step"
+                Expect.stringContains logged "Failure" "logged message mentions Failure"
+                Expect.isTrue (isFailure r) "returns unchanged"
+            }
+
+            test "log skips logger when record is false" {
+                let mutable count = 0
+                Returns.ok 1 |> Returns.log (fun _ -> count <- count + 1) false "step" |> ignore
+                Expect.equal count 0 "logger not called when record is false"
+            }
+
+            test "log propagates the returns value unchanged" {
+                let r = Returns.warn "w" 7 |> Returns.log (fun _ -> ()) true "step"
+                match r with
+                | Success (v, msgs) ->
+                    Expect.equal v 7 "value unchanged"
+                    Expect.equal msgs ["w"] "warning unchanged"
+                | _ -> failtest "Expected Success"
+            }
+        ]
+
+    // ============================================================
+    // Result.Extension — map2 / map3 / map4 / mapError / flatten / merge / zip / partition
+    // ============================================================
+
+    let resultExtMapAdvancedTests =
+        testList "Result.Extension - map2 / map3 / map4 / mapError / flatten / merge / zip / partition" [
+
+            test "map2 combines two Ok values" {
+                let r = Result.map2 (fun a b -> a + b) (Ok 3) (Ok 4)
+                match r with
+                | Ok v -> Expect.equal v 7 "should be 7"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "map2 propagates first Error" {
+                let r : Result<int,string> = Result.map2 (fun a b -> a + b) (Error "e1") (Ok 4)
+                match r with
+                | Error e -> Expect.equal e "e1" "first error"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "map2 propagates second Error when first is Ok" {
+                let r : Result<int,string> = Result.map2 (fun a b -> a + b) (Ok 3) (Error "e2")
+                match r with
+                | Error e -> Expect.equal e "e2" "second error"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "map3 combines three Ok values" {
+                let r = Result.map3 (fun a b c -> a + b + c) (Ok 1) (Ok 2) (Ok 3)
+                match r with
+                | Ok v -> Expect.equal v 6 "should be 6"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "map3 propagates Error from any argument" {
+                let r : Result<int,string> = Result.map3 (fun a b c -> a + b + c) (Ok 1) (Error "e") (Ok 3)
+                match r with
+                | Error e -> Expect.equal e "e" "error propagated"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "map4 combines four Ok values" {
+                let r = Result.map4 (fun a b c d -> a + b + c + d) (Ok 1) (Ok 2) (Ok 3) (Ok 4)
+                match r with
+                | Ok v -> Expect.equal v 10 "should be 10"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "mapError transforms Error value" {
+                let r = Result.mapError (fun e -> sprintf "[E] %s" e) (Error "bad")
+                match r with
+                | Error e -> Expect.equal e "[E] bad" "error transformed"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "mapError leaves Ok unchanged" {
+                let r = Result.mapError (fun _ -> "never") (Ok 42)
+                match r with
+                | Ok v -> Expect.equal v 42 "unchanged"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "flatten collapses nested Ok" {
+                let r = Result.flatten (Ok (Ok 42))
+                match r with
+                | Ok v -> Expect.equal v 42 "unwrapped"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "flatten propagates inner Error" {
+                let r = Result.flatten (Ok (Error "inner"))
+                match r with
+                | Error e -> Expect.equal e "inner" "inner error"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "flatten propagates outer Error" {
+                let r : Result<int,string> = Result.flatten (Error "outer")
+                match r with
+                | Error e -> Expect.equal e "outer" "outer error"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "merge combines two Ok values" {
+                let r = Result.merge (+) (@) (Ok 3) (Ok 4)
+                match r with
+                | Ok v -> Expect.equal v 7 "7"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "merge propagates first Error when second is Ok" {
+                let r : Result<int,string list> = Result.merge (+) (@) (Error ["e1"]) (Ok 4)
+                match r with
+                | Error es -> Expect.equal es ["e1"] "first error"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "merge concatenates errors from two Errors" {
+                let r = Result.merge (+) (@) (Error ["e1"]) (Error ["e2"])
+                match r with
+                | Error es -> Expect.equal es ["e1";"e2"] "both errors"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "zip combines two Ok values into a tuple" {
+                let r = Result.zip (Ok 1) (Ok 2)
+                match r with
+                | Ok (a, b) ->
+                    Expect.equal a 1 "first"
+                    Expect.equal b 2 "second"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "zip propagates first Error" {
+                let r : Result<int*int,string> = Result.zip (Error "e") (Ok 2)
+                match r with
+                | Error e -> Expect.equal e "e" "first error"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "partition separates Ok and Error" {
+                let items : Result<int,string> list = [ Ok 1; Error "e1"; Ok 2; Error "e2" ]
+                let (oks, errs) = Result.partition items
+                Expect.equal oks [1;2] "ok values"
+                Expect.equal errs ["e1";"e2"] "error values"
+            }
+
+            test "partition all Oks" {
+                let (oks, errs) = Result.partition [ Ok 1; Ok 2 ]
+                Expect.equal oks [1;2] "all oks"
+                Expect.equal errs [] "no errors"
+            }
+
+            test "partition all Errors" {
+                let (oks, errs) : int list * string list = Result.partition [ Error "e1"; Error "e2" ]
+                Expect.equal oks [] "no oks"
+                Expect.equal errs ["e1";"e2"] "all errors"
+            }
+        ]
+
+    // ============================================================
+    // Result.Extension — fold / foldList
+    // ============================================================
+
+    let resultExtFoldTests =
+        testList "Result.Extension - fold / foldList" [
+
+            test "fold accumulates Ok values" {
+                let r = ROP.Result.fold (+) (Ok 0) [ Ok 1; Ok 2; Ok 3 ]
+                match r with
+                | Ok v -> Expect.equal v 6 "should be 6"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "fold stops accumulating on first Error (keeps first Error)" {
+                let r = ROP.Result.fold (+) (Ok 0) [ Ok 1; Error "e"; Ok 3 ]
+                match r with
+                | Error e -> Expect.equal e "e" "first error kept"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "fold on empty sequence returns initial state" {
+                let r = ROP.Result.fold (+) (Ok 99) []
+                match r with
+                | Ok v -> Expect.equal v 99 "initial state"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "foldList accumulates Ok values" {
+                let r = Result.foldList (+) (Ok 0) [ Ok 1; Ok 2; Ok 3 ]
+                match r with
+                | Ok v -> Expect.equal v 6 "should be 6"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "foldList accumulates ALL errors across failures" {
+                let r = Result.foldList (+) (Ok 0) [ Ok 1; Error ["e1"]; Ok 3; Error ["e2"] ]
+                match r with
+                | Error es -> Expect.equal es ["e1";"e2"] "both errors collected"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "foldList on empty sequence returns initial Ok state" {
+                let r = Result.foldList (+) (Ok 0) []
+                match r with
+                | Ok v -> Expect.equal v 0 "initial state"
+                | _ -> failtest "Expected Ok"
+            }
+        ]
+
+    // ============================================================
+    // Result.Extension — eitherTee / successTee / failureTee / tee / log
+    // ============================================================
+
+    let resultExtTeeLogTests =
+        testList "Result.Extension - tee / eitherTee / successTee / failureTee / log" [
+
+            test "tee executes side effect and returns original value" {
+                let mutable seen = 0
+                let result = Result.tee (fun v -> seen <- v) 42
+                Expect.equal result 42 "value returned"
+                Expect.equal seen 42 "side effect executed"
+            }
+
+            test "eitherTee calls fOk on Ok" {
+                let mutable called = false
+                let r = Ok 5 |> Result.eitherTee (fun _ -> called <- true) ignore
+                Expect.isTrue called "fOk called"
+                Expect.equal r (Ok 5) "propagated unchanged"
+            }
+
+            test "eitherTee calls fError on Error" {
+                let mutable called = false
+                let r = Error "e" |> Result.eitherTee ignore (fun _ -> called <- true)
+                Expect.isTrue called "fError called"
+                Expect.equal r (Error "e") "propagated unchanged"
+            }
+
+            test "successTee only executes on Ok" {
+                let mutable count = 0
+                Ok 1 |> Result.successTee (fun _ -> count <- count + 1) |> ignore
+                Error "e" |> Result.successTee (fun _ -> count <- count + 1) |> ignore
+                Expect.equal count 1 "called only once"
+            }
+
+            test "failureTee only executes on Error" {
+                let mutable count = 0
+                Ok 1 |> Result.failureTee (fun _ -> count <- count + 1) |> ignore
+                Error "e" |> Result.failureTee (fun _ -> count <- count + 1) |> ignore
+                Expect.equal count 1 "called only once"
+            }
+
+            test "log calls logger on Ok when record is true" {
+                let mutable logged = ""
+                let r = Ok 42 |> Result.log (fun s -> logged <- s) true "label"
+                Expect.stringContains logged "Ok" "mentions Ok"
+                Expect.stringContains logged "label" "contains label"
+                Expect.equal r (Ok 42) "propagated unchanged"
+            }
+
+            test "log calls logger on Error when record is true" {
+                let mutable logged = ""
+                let r = Error "bad" |> Result.log (fun s -> logged <- s) true "label"
+                Expect.stringContains logged "Error" "mentions Error"
+                Expect.isTrue (Result.isError r) "propagated unchanged"
+            }
+
+            test "log skips logger when record is false" {
+                let mutable count = 0
+                Ok 1 |> Result.log (fun _ -> count <- count + 1) false "label" |> ignore
+                Expect.equal count 0 "not called"
+            }
+        ]
+
+    // ============================================================
+    // Result.Extension — compose / >>= / >=> / protect
+    // ============================================================
+
+    let resultExtComposeTests =
+        testList "Result.Extension - compose / >>= / >=> / protect" [
+
+            test "compose chains two switch functions" {
+                let f1 v = Ok (v + 1)
+                let f2 v = Ok (v * 2)
+                let r = Result.compose f1 f2 3
+                match r with
+                | Ok v -> Expect.equal v 8 "(3+1)*2=8"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "compose propagates first Error" {
+                let f1 _ = Error "step1"
+                let f2 v = Ok (v * 2)
+                let r = Result.compose f1 f2 5
+                match r with
+                | Error e -> Expect.equal e "step1" "first error"
+                | _ -> failtest "Expected Error"
+            }
+
+            test "compose propagates second Error" {
+                let f1 v = Ok (v + 1)
+                let f2 _ = Error "step2"
+                let r = Result.compose f1 f2 5
+                match r with
+                | Error e -> Expect.equal e "step2" "second error"
+                | _ -> failtest "Expected Error"
+            }
+
+            test ">>= operator chains Result (via Result.bind)" {
+                // Result.Operators.>>= is shadowed by Returns.Operators.>>= so we call bind directly;
+                // the operator itself works the same way — this tests the underlying semantics.
+                let r = Ok 5 |> Result.bind (fun v -> Ok (v + 1))
+                match r with
+                | Ok v -> Expect.equal v 6 "should be 6"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test ">>= propagates Error (via Result.bind)" {
+                let r : Result<int,string> = Error "e" |> Result.bind (fun v -> Ok (v + 1))
+                match r with
+                | Error e -> Expect.equal e "e" "error propagated"
+                | _ -> failtest "Expected Error"
+            }
+
+            test ">=> operator composes in series (via Result.compose)" {
+                let f1 v = Ok (v + 1)
+                let f2 v = Ok (v * 2)
+                let r = Result.compose f1 f2 3
+                match r with
+                | Ok v -> Expect.equal v 8 "8"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "protect returns Ok when function succeeds" {
+                let r = Result.protect (fun x -> x + 1) 5
+                match r with
+                | Ok v -> Expect.equal v 6 "should be 6"
+                | _ -> failtest "Expected Ok"
+            }
+
+            test "protect returns Error when function throws" {
+                let r = Result.protect (fun _ -> failwith "boom") 0
+                match r with
+                | Error _ -> ()
+                | _ -> failtest "Expected Error"
+            }
+        ]
+
+    // ============================================================
+    // Integration — complex object construction and calculation
+    // ============================================================
+
+    // Domain types for integration tests (must be at module level in F#)
+    type Widget = { Width: float; Height: float; Depth: float }
+    type Part   = { Mass: float; Length: float }
+    type Vessel = { Pressure: float; Temperature: float; Volume: float }
+
+    let integrationComplexTests =
+        testList "Integration - Complex object construction and calculation pipeline" [
+
+            test "applicative <!>/<*> collects ALL field errors for complex type" {
+                let validatePos name v : Returns<float,string> =
+                    if v > 0.0 then Returns.ok v else Returns.fail (sprintf "%s must be positive" name)
+                let r =
+                    fun w h d -> { Width = w; Height = h; Depth = d }
+                    <!> validatePos "Width"  -1.0
+                    <*> validatePos "Height" -2.0
+                    <*> validatePos "Depth"   3.0
+                Expect.equal (failureMessages r) ["Width must be positive";"Height must be positive"] "all errors"
+            }
+
+            test "CE and! accumulates errors from independent sub-validators" {
+                let validateMass v : Returns<float,string> =
+                    if v > 0.0 then Returns.ok v else Returns.fail "Mass must be positive"
+                let validateLen v : Returns<float,string> =
+                    if v > 0.0 then Returns.ok v else Returns.fail "Length must be positive"
+                let build m l = returns {
+                    let! vm = validateMass m
+                    and! vl = validateLen l
+                    return { Mass = vm; Length = vl }
+                }
+                let r = build -1.0 -2.0
+                Expect.equal (failureMessages r) ["Mass must be positive";"Length must be positive"] "both errors"
+            }
+
+            test "validateAll collects all errors and warnings from a record" {
+                let checkP (v:Vessel) = if v.Pressure > 0.0    then Returns.ok () else Returns.fail "Pressure <= 0"
+                let checkT (v:Vessel) = if v.Temperature > 0.0  then Returns.ok () else Returns.fail "Temperature <= 0"
+                let warnHighP (v:Vessel) = if v.Pressure > 100.0 then Returns.warn "High pressure" () else Returns.ok ()
+                let validate = Returns.validateAll [ checkP; checkT; warnHighP ]
+                let r = validate { Pressure = -5.0; Temperature = -10.0; Volume = 1.0 }
+                Expect.equal (failureMessages r) ["Pressure <= 0";"Temperature <= 0"] "both errors"
+            }
+
+            test "traverseList validates a list of sub-components collecting all errors" {
+                let validateComponent (v:float) : Returns<float,string> =
+                    if v > 0.0 then Returns.ok v else Returns.fail (sprintf "component %.1f invalid" v)
+                let components = [1.0; -2.0; 3.0; -4.0]
+                let r = Returns.traverseList validateComponent components
+                Expect.equal (failureMessages r) ["component -2.0 invalid";"component -4.0 invalid"] "all errors"
+            }
+
+            test "warnIf appends warning during calculation without stopping the pipeline" {
+                let calcArea diameter length =
+                    Returns.ok (System.Math.PI * diameter * length)
+                    |> Returns.warnIf (fun a -> a < 1.0) "Area below recommended minimum"
+                let r = calcArea 0.01 0.5
+                match r with
+                | Success (v, msgs) ->
+                    Expect.isGreaterThan v 0.0 "positive area"
+                    Expect.equal msgs ["Area below recommended minimum"] "warning present"
+                | _ -> failtest "Expected Success with warning"
+            }
+
+            test "mapWarnings and mapErrors annotate messages independently" {
+                let withWarn = Returns.warn "raw warning" 42.0
+                let withErr  = Returns.fail<float,string> "raw error"
+                let annotated = withWarn |> Returns.mapWarnings (fun m -> "[WARN] " + m)
+                let annotatedErr = withErr |> Returns.mapErrors (fun m -> "[ERR] " + m)
+                match annotated with
+                | Success (_, msgs) -> Expect.equal msgs ["[WARN] raw warning"] "warning annotated"
+                | _ -> failtest "Expected Success"
+                Expect.equal (failureMessages annotatedErr) ["[ERR] raw error"] "error annotated"
+            }
+
+            test "full pipeline: parse -> validate -> compute -> warn" {
+                let parse (s:string) : Returns<float,string> =
+                    match System.Double.TryParse(s) with
+                    | true, v -> Returns.ok v
+                    | _ -> Returns.fail (sprintf "Cannot parse '%s'" s)
+                let validatePositive v : Returns<float,string> =
+                    if v > 0.0 then Returns.ok v
+                    else Returns.fail "Value must be positive"
+                let compute v = Returns.ok (v * v)
+                let pipeline s =
+                    parse s
+                    >>= validatePositive
+                    >>= compute
+                    |> Returns.warnIf (fun v -> v > 1000.0) "Large squared value"
+                Expect.equal (successValue (pipeline "5")) 25.0 "5^2 = 25"
+                Expect.equal (successValue (pipeline "40"))  1600.0 "40^2 = 1600"
+                Expect.isTrue (pipeline "40" |> Returns.hasWarnings) "warning for large value"
+                Expect.isTrue (pipeline "-3" |> isFailure) "negative fails"
+                Expect.isTrue (pipeline "abc" |> isFailure) "non-numeric fails"
+            }
+
+            test "sequenceList collects valid and invalid items into single result" {
+                let validated = [ Returns.ok 1.0; Returns.fail "e1"; Returns.warn "w" 3.0; Returns.fail "e2" ]
+                let r = Returns.sequenceList validated
+                Expect.equal (failureMessages r) ["e1";"e2"] "failures accumulated"
+            }
+
+            test "CE returnFrom and sequential bind with warnings in each step" {
+                let step1 v = Returns.warn "w1" (v + 1)
+                let step2 v = Returns.warn "w2" (v * 2)
+                let step3 v = Returns.ok   (v - 1)
+                let r = returns {
+                    let! a = step1 3    // 4, w1
+                    let! b = step2 a    // 8, w2 (w1 already held)
+                    return! step3 b     // 7
+                }
+                match r with
+                | Success (v, msgs) ->
+                    Expect.equal v 7 "final value"
+                    Expect.contains msgs "w1" "w1 present"
+                    Expect.contains msgs "w2" "w2 present"
+                | _ -> failtest "Expected Success"
+            }
+        ]
+
+// ============================================================
 // Performance rewrites: equivalence with the previous implementations
 // ============================================================
 
@@ -2211,6 +2919,51 @@ let rec shapeLists maxLen : Returns<int,string> list list =
           for tail in shorter |> List.filter (fun l -> l.Length = maxLen - 1) do
               for head in shapes $"[{maxLen}]" maxLen do
                   yield head :: tail ]
+
+let returnsFoldStepsTests =
+    testList "Returns - foldSteps" [
+
+        test "foldSteps threads the state and collects warnings in chronological order" {
+            let step total x = Returns.ok (total + x) |> Returns.warnIf (fun t -> t > 5) $"total {total + x} above 5"
+            let r = Returns.foldSteps step 0 [ 1; 2; 3; 4 ]
+            Expect.equal r (Success (10, [ "total 6 above 5"; "total 10 above 5" ])) "state 10, warnings in step order"
+        }
+
+        test "foldSteps on no items returns the initial state" {
+            Expect.equal (Returns.foldSteps (fun s (x: int) -> Returns.ok (s + x)) 7 []) (Success (7, [])) "initial state"
+        }
+
+        test "foldSteps stops at the first failing step, keeping earlier warnings before its errors" {
+            let visited = ResizeArray()
+            let step s x =
+                visited.Add x
+                if x = 3 then Returns.failmany [ "e3a"; "e3b" ] else Returns.warn $"w{x}" (s + x)
+            Expect.equal (Returns.foldSteps step 0 [ 1; 2; 3; 4 ]) (Failure [ "w1"; "w2"; "e3a"; "e3b" ]) "warnings, then errors"
+            Expect.equal (List.ofSeq visited) [ 1; 2; 3 ] "item 4 never visited"
+        }
+
+        test "foldSteps matches a for-loop in returns { } on every combination of step results" {
+            for l in shapeLists 3 do
+                let viaFold = Returns.foldSteps (fun s (r: Returns<int,string>) -> r |> Returns.map ((+) s)) 0 l
+                let state = ref 0
+                let viaFor =
+                    returns {
+                        for r in l do
+                            let! v = r
+                            state.Value <- state.Value + v
+                        return state.Value
+                    }
+                Expect.equal viaFold viaFor $"{l}"
+        }
+
+        test "foldSteps is the linear replacement for warnIf on an accumulating value" {
+            let n = 2_000
+            let mutable trap = Returns.ok 0
+            for i in 1 .. n do trap <- trap |> Returns.map ((+) 1) |> Returns.warnIf (fun _ -> i % 2 = 0) $"node {i}"
+            let linear = Returns.foldSteps (fun s i -> Returns.ok (s + 1) |> Returns.warnIf (fun _ -> i % 2 = 0) $"node {i}") 0 [ 1 .. n ]
+            Expect.equal linear trap "same value, same warnings, same order"
+        }
+    ]
 
 let performanceEquivalenceTests =
     testList "Performance rewrites - equivalence with previous implementations" [
@@ -2382,6 +3135,8 @@ let main argv =
             returnsMapWarningsErrorsTests
             returnsValidateAllTests
             returnsAndBangTests
+            returnsBuilderForLoopTests
+            returnsFoldStepsTests
             returnsWarnIfLazyTests
             returnsPlainResultTests
             returnsAggregationTests
@@ -2389,6 +3144,16 @@ let main argv =
             returnsTraverseVariantsTests
             testingModuleTests
             performanceEquivalenceTests
+            returnsFilterTests
+            returnsRecoverTests
+            Ported.returnsTraverseListTests
+            Ported.returnsLogTests
+            Ported.resultExtMapAdvancedTests
+            Ported.resultExtFoldTests
+            Ported.resultExtTeeLogTests
+            Ported.resultExtComposeTests
+            Ported.integrationComplexTests
+            PerformanceTests.performanceTests
             resultExtensionTests
             choiceExtensionTests
             optionExtensionTests

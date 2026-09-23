@@ -13,6 +13,11 @@ jobs:
   build-and-test:
     name: Build, Test & Upload Artifact
     runs-on: ubuntu-latest
+    env:
+      # The load tests in Test/Performance.fs have wall-clock budgets calibrated on a developer machine; shared
+      # runners are slower and noisier, so time budgets are relaxed 3x here. Memory budgets are deterministic and
+      # are not scaled.
+      ROP_PERF_TIME_SCALE: '3'
 
     steps:
       - name: Checkout
