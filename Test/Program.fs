@@ -2126,6 +2126,17 @@ let testingModuleTests =
 /// combinator must return exactly what its previous version returned, on every combination of inputs.
 module Reference =
 
+    // bind / jointMessages as they were before commit 019d2f0 (through `either` with local lambdas).
+    let jointMessages (messages: 'm list) (returns: Returns<'s,'m>) =
+        let fSuccess (x, msgs) = Success (x, msgs @ messages)
+        let fFailure errs = Failure (errs @ messages)
+        Returns.either fSuccess fFailure returns
+
+    let bind (f: 'a -> Returns<'b,'m>) (returns: Returns<'a,'m>) =
+        let fSuccess (s, msgs) = f s |> jointMessages msgs
+        let fFailure msgs = Failure msgs
+        Returns.either fSuccess fFailure returns
+
     let map2 f r1 r2 = Returns.ok f |> Returns.apply <| r1 |> Returns.apply <| r2
     let map3 f r1 r2 r3 = Returns.ok f |> Returns.apply <| r1 |> Returns.apply <| r2 |> Returns.apply <| r3
     let map4 f r1 r2 r3 r4 = Returns.ok f |> Returns.apply <| r1 |> Returns.apply <| r2 |> Returns.apply <| r3 |> Returns.apply <| r4
@@ -2214,6 +2225,29 @@ let performanceEquivalenceTests =
                         for d in shapes "d" 4 do
                             Expect.equal (Returns.map4 (fun x y z w -> x + y + z + w) a b c d)
                                          (Reference.map4 (fun x y z w -> x + y + z + w) a b c d) $"map4 {a} {b} {c} {d}"
+        }
+
+        test "jointMessages matches the previous implementation on every shape and message list" {
+            for a in shapes "a" 1 do
+                for extra in [ []; [ "x1" ]; [ "x1"; "x2" ] ] do
+                    Expect.equal (Returns.jointMessages extra a) (Reference.jointMessages extra a) $"jointMessages {extra} {a}"
+        }
+
+        test "bind / >>= / compose / let! match the previous bind on every combination of two steps" {
+            for a in shapes "a" 1 do
+                for b in shapes "b" 2 do
+                    for c in shapes "c" 3 do
+                        let f (x: int) = b |> Returns.map ((+) x)
+                        let g (x: int) = c |> Returns.map ((*) x)
+                        let expected = a |> Reference.bind f |> Reference.bind g
+                        Expect.equal (a |> Returns.bind f |> Returns.bind g) expected $"bind {a} {b} {c}"
+                        Expect.equal (a >>= f >>= g) expected $">>= {a} {b} {c}"
+                        Expect.equal (a |> Returns.bind (f >=> g)) (a |> Reference.bind (fun x -> f x |> Reference.bind g)) $">=> {a} {b} {c}"
+                        let ce = returns { let! x = a
+                                           let! y = f x
+                                           let! z = g y
+                                           return z }
+                        Expect.equal ce expected $"let! {a} {b} {c}"
         }
 
         test "map matches apply (ok f) on every shape" {
