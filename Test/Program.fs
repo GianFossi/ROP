@@ -797,6 +797,90 @@ let returnsWarnIfTests =
             | Success (_, msgs) -> Expect.equal msgs ["w1";"w2"] "both warnings present"
             | _ -> failtest "Expected Success"
         }
+
+        test "warnIfLazy appends built message when predicate holds" {
+            let r = Returns.ok 5 |> Returns.warnIfLazy (fun v -> v > 3) (fun () -> "above threshold")
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 5 "value preserved"
+                Expect.equal msgs ["above threshold"] "warning appended"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "warnIfLazy does not invoke thunk when predicate does not hold" {
+            let mutable called = false
+            let r =
+                Returns.ok 1
+                |> Returns.warnIfLazy (fun v -> v > 3) (fun () -> called <- true; "w")
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 1 "value preserved"
+                Expect.equal msgs [] "no warning appended"
+            | _ -> failtest "Expected Success"
+            Expect.isFalse called "thunk should not fire when predicate is false"
+        }
+
+        test "warnIfLazy does not invoke thunk on Failure" {
+            let mutable called = false
+            let r =
+                Returns.fail "err"
+                |> Returns.warnIfLazy (fun _ -> true) (fun () -> called <- true; "w")
+            Expect.isTrue (isFailure r) "should remain Failure"
+            Expect.equal (failureMessages r) ["err"] "error unchanged"
+            Expect.isFalse called "thunk should not fire on Failure"
+        }
+
+        test "warnIfLazy accumulates on existing warnings" {
+            let r =
+                Returns.warn "w1" 5
+                |> Returns.warnIfLazy (fun v -> v > 3) (fun () -> "w2")
+            match r with
+            | Success (_, msgs) -> Expect.equal msgs ["w1";"w2"] "both warnings present"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "warnIfWith builds warning from the Success value" {
+            let r =
+                Returns.ok 5
+                |> Returns.warnIfWith (fun v -> v > 3) (fun v -> sprintf "v=%d" v)
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 5 "value preserved"
+                Expect.equal msgs ["v=5"] "value-aware warning appended"
+            | _ -> failtest "Expected Success"
+        }
+
+        test "warnIfWith does not invoke builder when predicate does not hold" {
+            let mutable called = false
+            let r =
+                Returns.ok 1
+                |> Returns.warnIfWith (fun v -> v > 3) (fun v -> called <- true; sprintf "v=%d" v)
+            match r with
+            | Success (v, msgs) ->
+                Expect.equal v 1 "value preserved"
+                Expect.equal msgs [] "no warning appended"
+            | _ -> failtest "Expected Success"
+            Expect.isFalse called "builder should not fire when predicate is false"
+        }
+
+        test "warnIfWith does not invoke builder on Failure" {
+            let mutable called = false
+            let r : Returns<int,string> =
+                Returns.fail "err"
+                |> Returns.warnIfWith (fun _ -> true) (fun v -> called <- true; sprintf "v=%d" v)
+            Expect.isTrue (isFailure r) "should remain Failure"
+            Expect.equal (failureMessages r) ["err"] "error unchanged"
+            Expect.isFalse called "builder should not fire on Failure"
+        }
+
+        test "warnIfWith accumulates on existing warnings" {
+            let r =
+                Returns.warn "w1" 5
+                |> Returns.warnIfWith (fun v -> v > 3) (fun v -> sprintf "v=%d" v)
+            match r with
+            | Success (_, msgs) -> Expect.equal msgs ["w1";"v=5"] "both warnings present"
+            | _ -> failtest "Expected Success"
+        }
     ]
 
 let returnsMapWarningsErrorsTests =

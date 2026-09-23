@@ -10,7 +10,7 @@
     <Version>1.1.0</Version>
     <Description>An F# library implementing Railway-Oriented Programming around a custom Returns type that tracks warnings alongside success values.</Description>
     <PackageTags>fsharp;railway-oriented-programming;functional;validation;result</PackageTags>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <RepositoryUrl>https://github.com/GianFossi/ROP</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -18,6 +18,10 @@
 
   <ItemGroup>
     <Content Include="ROP.ico" />
+    <None Include="..\LICENSE">
+      <Pack>True</Pack>
+      <PackagePath></PackagePath>
+    </None>
     <Compile Include="Option.Extension.fs" />
     <Compile Include="Choice.Extension.fs" />
     <Compile Include="Result.Extension.fs" />
