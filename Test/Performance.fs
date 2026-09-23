@@ -282,7 +282,23 @@ let performanceTests =
             (Returns.fold (+) (Returns.ok 0.0))
             (fun r -> Expect.equal (Testing.getWithWarnings r |> fst) (float 999_999 * 1_000_000.0 / 2.0) "sum of all channels")
 
+        perfTest "foldSteps: 1M-node march, state threaded, a warning every other node" 1_000_000
+            { MaxMilliseconds = 900.0; MaxBytesPerItem = bytes 135.0 195.0 }
+            ignore
+            (fun () ->
+                Returns.foldSteps
+                    (fun t i -> Returns.ok (t + 0.01) |> Returns.warnIfLazy (fun _ -> i % 2 = 0) (fun () -> Extrapolated ("Gnielinski", i)))
+                    300.0 (seq { 1 .. 1_000_000 }))
+            (fun r ->
+                let t, warnings = Testing.getWithWarnings r
+                Expect.floatClose Accuracy.medium t (300.0 + 0.01 * 1_000_000.0) "final state"
+                Expect.equal warnings.Length 500_000 "one warning every other node"
+                Expect.equal warnings.Head (Extrapolated ("Gnielinski", 2)) "chronological order")
+
         // --- Linearity guards (memory per item must not grow with size) --------------------------------------
+        linearityTest "linearity: foldSteps with a warning every step" 100_000 1.3
+            id
+            (fun n -> Returns.foldSteps (fun s i -> Returns.warn i (s + 1)) 0 (seq { 1 .. n }))
         linearityTest "linearity: traverseList" 200_000 1.3
             (fun n -> [ 0 .. n - 1 ])
             (Returns.traverseList measureChannel)

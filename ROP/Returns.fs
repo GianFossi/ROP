@@ -120,9 +120,11 @@ module Returns =
     /// <remarks>
     /// Appending to the end of an immutable list copies it, so each call costs O(number of warnings already present).
     /// That is negligible in a pipeline, but calling <c>warnIf</c> thousands of times on the SAME accumulating value
-    /// (e.g. in a loop) is quadratic: 20,000 calls allocate about 6 GB. In a loop, produce one <c>Returns</c> per
-    /// item and combine them with <c>traverseList</c>/<c>traverseArray</c>, <c>validateAll</c> or a <c>for</c> loop
-    /// inside <c>returns { }</c>, which are all linear.
+    /// (e.g. in a loop) is quadratic: 20,000 calls allocate about 6 GB. In a loop that threads a state (a marching
+    /// solver), use <see cref="foldSteps"/> with <c>warnIf</c>/<c>warnIfLazy</c> inside the step, which is linear and
+    /// keeps the warnings in chronological order; without a state, produce one <c>Returns</c> per item and combine
+    /// them with <c>traverseList</c>/<c>traverseArray</c>, <c>validateAll</c> or a <c>for</c> loop inside
+    /// <c>returns { }</c>.
     /// </remarks>
     let warnIf (predicate: 'TSuccess -> bool) (message: 'TMessage) (returns: Returns<'TSuccess,'TMessage>) : Returns<'TSuccess,'TMessage> =
         match returns with
@@ -940,6 +942,39 @@ module Returns =
                     for m in errs do msgsRev <- m :: msgsRev
         if succeeding then Success (current, List.rev msgsRev)
         else Failure (List.rev msgsRev)
+
+    /// <summary>
+    /// Threads a state through a sequence of items, one sequential step per item (a monadic fold, "foldM"): each step
+    /// receives the current state and the next item and returns the next state as a <c>Returns</c>, possibly with
+    /// warnings. STOPS AT THE FIRST FAILING STEP; the remaining items are not visited.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the linear way to write a marching/iterative calculation that raises warnings along the way. The
+    /// tempting alternative, re-assigning one accumulated value in a loop (<c>r &lt;- r |&gt; Returns.warnIf ...</c>),
+    /// copies the whole warning list on every append and is quadratic: 20,000 steps allocate about 6 GB. Here each
+    /// warning is added once, whatever the number of steps.</para>
+    /// <para>Warnings come out in chronological order (step 1's first), like a <c>for</c> loop inside
+    /// <c>returns { }</c> and unlike a hand-written chain of <c>&gt;&gt;=</c>, which puts each later step's warnings in
+    /// front. On failure, the Failure carries the warnings of the earlier steps followed by the failing step's errors.</para>
+    /// </remarks>
+    /// <param name="step">Computes the next state from the current state and an item.</param>
+    /// <param name="initial">The state before the first item.</param>
+    /// <param name="items">The items to step through, in order.</param>
+    /// <returns>A Success of the final state with every step's warnings in order, or a Failure with the earlier warnings followed by the first failing step's errors.</returns>
+    let inline foldSteps (step: 'State -> 'T -> Returns<'State,'TMessage>) (initial: 'State) (items: 'T seq) : Returns<'State,'TMessage> =
+        use e = items.GetEnumerator()
+        let mutable state = initial
+        let mutable msgsRev : 'TMessage list = []
+        let mutable failure = None
+        while failure.IsNone && e.MoveNext() do
+            match step state e.Current with
+            | Success (next, msgs) ->
+                state <- next
+                for m in msgs do msgsRev <- m :: msgsRev
+            | Failure errs -> failure <- Some (Failure (List.rev msgsRev @ errs))
+        match failure with
+        | Some f -> f
+        | None   -> Success (state, List.rev msgsRev)
 
     // -------------------------------------------------------------------------------------- //
 

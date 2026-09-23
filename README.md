@@ -27,11 +27,12 @@ This repository contains an F# library that implements a Railway-Oriented Progra
 This release only adds; code written against 1.1.x compiles unchanged.
 
 - `Returns.filter` and `Returns.filterWith` add post-condition checks, turning a Success into a Failure when a predicate fails. The warnings collected so far are kept after the error, as with a failing `>>=` step. `filterWith` builds the message from the value, and only when the check fails.
+- `Returns.foldSteps` threads a state through a sequence one step at a time (a monadic fold). It stops at the first failure and collects warnings in chronological order. This is the **linear** way to write a marching or iterative calculation: re-applying `warnIf` to one accumulating value in a loop is quadratic (1.6 GB for 20,000 steps, against 4 MB with `foldSteps` + `warnIfLazy`).
 - `Returns.recover` provides error recovery: the errors go to a compensation function whose result replaces the Failure. That result can be a fallback Success, ideally with a warning saying so, or a different Failure.
 - `for` loops inside `returns { }` now compile. They never did before: the builder's `Source` member only accepted `Returns` values, and the compiler applies `Source` to the sequence of a `for` loop too.
 - `Returns.ToString()` no longer throws `NullReferenceException` when a message is `null`.
 - Load tests with time and memory budgets are new; see [Load tests](#load-tests-time-and-memory-budgets).
-- There are 91 more tests (380 in total). They include coverage for the `Result` extensions (`map2`–`map4`, `mapError`, `flatten`, `merge`, `zip`, `partition`, `fold`, `foldList`, the tee functions, `compose`, `protect`), `Returns.log`, and complex-object integration scenarios.
+- There are 98 more tests (387 in total). They include coverage for the `Result` extensions (`map2`–`map4`, `mapError`, `flatten`, `merge`, `zip`, `partition`, `fold`, `foldList`, the tee functions, `compose`, `protect`), `Returns.log`, and complex-object integration scenarios.
 
 ## What's new in 1.1.0
 
@@ -158,7 +159,7 @@ ROP/
 ├── Test/
 │   ├── Test.fsproj
 │   ├── Performance.fs         # load tests with time and memory budgets
-│   └── Program.fs             # Expecto test suite (380 tests)
+│   └── Program.fs             # Expecto test suite (387 tests)
 └── Setup/
     └── Setup.vdproj           # legacy Visual Studio Installer project (not part of the build)
 ```
@@ -195,6 +196,7 @@ ROP/
   | --- | --- | --- |
   | list | `traverseList`, `sequenceList` | `traverseListFailFast` |
   | array | `traverseArray` | `traverseArrayFailFast` |
+  | state threaded through the items | n/a | `foldSteps` |
 
   The array forms write into a pre-sized array instead of building and reversing an intermediate list.
 
@@ -669,6 +671,8 @@ Since v1.1.0, a clean pipeline costs one `Success` (32 B) per step on both runti
 | Edge | once per solve / request | decode flags into `Returns.warnmany` / `Returns.fail`, then ordinary ROP upstream |
 | Warm paths | per solve | `Returns` freely; prefer `warnIfLazy`, `traverseArray*`, and `dedupeWarnings`/`summariseWarnings` before reporting |
 
+In ROP code that loops, do not re-apply `warnIf` to one accumulating value: each call copies every warning collected so far, which is quadratic. Thread the state with `Returns.foldSteps` instead (linear, chronological warnings); [docs/ZERO-ALLOC.md](docs/ZERO-ALLOC.md) has the measurements.
+
 Combining flags with `|||` also removes duplicate warnings for free: 100 out-of-range nodes set the same bit once. The design note has a worked example of the kernel/edge split.
 
 To reproduce the figures:
@@ -715,7 +719,7 @@ A warm-up run comes first, and every run prints a line like:
 [perf] marching solver: 50k nodes, clean     50000 items     14.7 ms     294.1 ns/item     323.2 B/item  gen0=1
 ```
 
-Two environment variables control them:
+There is also a 1M-node `foldSteps` march. Two environment variables control the load tests:
 
 | Variable | Effect |
 | --- | --- |

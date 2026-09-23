@@ -65,10 +65,20 @@ Every rewrite below keeps the semantics exactly: same values, same warnings and 
   - `hasLengthOf`, `hasMinLengthOf`, `hasMaxLengthOf`, `isNotEmpty` and `isEmpty` read `string.Length` instead of enumerating the string character by character.
 
 **Quadratic patterns to avoid.** Warnings are immutable lists, so appending to the end of one copies it.
-- **`warnIf` on the same accumulating value.** Each call costs O(warnings already present). Measured on net8.0 Release: 5,000 appends cost 0.4 GB and 245 ms; 10,000 cost 1.6 GB and 447 ms; 20,000 cost 6.4 GB and 1.8 s.
+- **`warnIf` on the same accumulating value.** Each call costs O(warnings already present).
 - **Long `&&&` chains where every validator warns.** They grow the same way: 1,000 / 2,000 / 4,000 validators allocate 16 / 64 / 257 MB.
 
-`validateAll` with the same 4,000 warning validators allocates 0.8 MB. So do per-item `Returns` combined with `traverseList`/`traverseArray` or a `for` loop in `returns { }`: they are all linear, as the linearity guards in `Test/Performance.fs` check.
+`warnIf` itself cannot be made cheaper without changing the type: `Returns` holds an ordinary F# list, and there is nowhere to keep a hidden accumulator. What helps is restructuring the loop. Below, a marching calculation threads a state through the nodes, with a warning at every other node (net10.0 Release):
+
+| Strategy | 20,000 steps | 1,000,000 steps | Warning order |
+| --- | --- | --- | --- |
+| `r <- r \|> Returns.map step \|> Returns.warnIf …` (the trap) | 427 ms · 1,606 MB | impractical (~4 TB) | chronological |
+| `warnIf` inside the step of a `>>=` chain | 2.2 ms · 6.0 MB | 189 ms · 311 MB | newest first |
+| `for` loop in `returns { }`, state in a ref cell | 6.1 ms · 7.1 MB | 258 ms · 303 MB | chronological |
+| **`Returns.foldSteps`** | 4.0 ms · 5.7 MB | 179 ms · 295 MB | chronological |
+| **`Returns.foldSteps` + `warnIfLazy`** | **1.5 ms · 4.0 MB** | **115 ms · 204 MB** | chronological |
+
+`Returns.foldSteps step initial items` (added in 1.2.0) is a monadic fold. It threads the state through the items, adds each warning once, keeps chronological order, and stops at the first failing step. Without a state to thread, `traverseList`/`traverseArray` and `validateAll` are linear too; `validateAll` with 4,000 warning validators allocates 0.8 MB, where the equivalent `&&&` chain allocates 257 MB. The linearity guards in `Test/Performance.fs` check all of these.
 
 **Stack safety.** `traverseList`, `traverseListFailFast`, `traverseArray`, `sequenceList`, `fold`, `partition`, `validateAll`, a 1M-step `>>=` chain, a 1M-iteration `for` loop in `returns { }`, and `eachItemWith` over 1M items all complete without deep recursion. The load tests cover several of these.
 

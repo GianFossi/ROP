@@ -2920,6 +2920,51 @@ let rec shapeLists maxLen : Returns<int,string> list list =
               for head in shapes $"[{maxLen}]" maxLen do
                   yield head :: tail ]
 
+let returnsFoldStepsTests =
+    testList "Returns - foldSteps" [
+
+        test "foldSteps threads the state and collects warnings in chronological order" {
+            let step total x = Returns.ok (total + x) |> Returns.warnIf (fun t -> t > 5) $"total {total + x} above 5"
+            let r = Returns.foldSteps step 0 [ 1; 2; 3; 4 ]
+            Expect.equal r (Success (10, [ "total 6 above 5"; "total 10 above 5" ])) "state 10, warnings in step order"
+        }
+
+        test "foldSteps on no items returns the initial state" {
+            Expect.equal (Returns.foldSteps (fun s (x: int) -> Returns.ok (s + x)) 7 []) (Success (7, [])) "initial state"
+        }
+
+        test "foldSteps stops at the first failing step, keeping earlier warnings before its errors" {
+            let visited = ResizeArray()
+            let step s x =
+                visited.Add x
+                if x = 3 then Returns.failmany [ "e3a"; "e3b" ] else Returns.warn $"w{x}" (s + x)
+            Expect.equal (Returns.foldSteps step 0 [ 1; 2; 3; 4 ]) (Failure [ "w1"; "w2"; "e3a"; "e3b" ]) "warnings, then errors"
+            Expect.equal (List.ofSeq visited) [ 1; 2; 3 ] "item 4 never visited"
+        }
+
+        test "foldSteps matches a for-loop in returns { } on every combination of step results" {
+            for l in shapeLists 3 do
+                let viaFold = Returns.foldSteps (fun s (r: Returns<int,string>) -> r |> Returns.map ((+) s)) 0 l
+                let state = ref 0
+                let viaFor =
+                    returns {
+                        for r in l do
+                            let! v = r
+                            state.Value <- state.Value + v
+                        return state.Value
+                    }
+                Expect.equal viaFold viaFor $"{l}"
+        }
+
+        test "foldSteps is the linear replacement for warnIf on an accumulating value" {
+            let n = 2_000
+            let mutable trap = Returns.ok 0
+            for i in 1 .. n do trap <- trap |> Returns.map ((+) 1) |> Returns.warnIf (fun _ -> i % 2 = 0) $"node {i}"
+            let linear = Returns.foldSteps (fun s i -> Returns.ok (s + 1) |> Returns.warnIf (fun _ -> i % 2 = 0) $"node {i}") 0 [ 1 .. n ]
+            Expect.equal linear trap "same value, same warnings, same order"
+        }
+    ]
+
 let performanceEquivalenceTests =
     testList "Performance rewrites - equivalence with previous implementations" [
 
@@ -3091,6 +3136,7 @@ let main argv =
             returnsValidateAllTests
             returnsAndBangTests
             returnsBuilderForLoopTests
+            returnsFoldStepsTests
             returnsWarnIfLazyTests
             returnsPlainResultTests
             returnsAggregationTests

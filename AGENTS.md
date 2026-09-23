@@ -45,7 +45,7 @@ An F# library (multi-targets .NET 8 LTS and .NET 10) implementing Railway-Orient
   - *Sequential* (short-circuit on first failure): `>>=` (bind), `>=>` / `<=<` (Kleisli)
   - *Applicative*: `<!>` (map), `<*>` (apply)
   - *Parallel* (accumulate all failures): `&&&`, `validateAll`
-  - *Collection*: `traverseList`/`traverseArray` (accumulate all failures), `traverseListFailFast`/`traverseArrayFailFast` (stop at the first), `sequenceList`, `partition`, `fold`
+  - *Collection*: `traverseList`/`traverseArray` (accumulate all failures), `traverseListFailFast`/`traverseArrayFailFast` (stop at the first), `sequenceList`, `partition`, `fold`, `foldSteps` (state threaded through items, linear — use it instead of re-applying `warnIf` to one accumulating value, which is quadratic)
   - *Warnings/context*: `warnIfLazy`, `warnIfWith`, `dedupeWarnings`, `summariseWarnings`, `withContextBy`
   - *Post-conditions/recovery*: `filter`, `filterWith`, `recover`
 
