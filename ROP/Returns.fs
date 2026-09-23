@@ -383,9 +383,12 @@ module Returns =
         // Note the append order: the returns' OWN messages come first, then the supplied "messages" - this
         // is what gives `bind` its documented (and test-covered) "newest step's messages first" ordering
         // when composed in a chain, since each step's own result becomes the "messages" side of the next call.
-        let fSuccess (x, msgs) = Success(x, msgs @ messages)
-        let fFailure errs = Failure(errs @ messages)
-        either fSuccess fFailure returns
+        // Matched directly rather than through `either` with local lambdas, which allocated closures on every call.
+        match messages, returns with
+        // Nothing to append: the result would be structurally identical to the input, so skip re-wrapping it.
+        | [], _                -> returns
+        | _, Success (x, msgs) -> Success(x, msgs @ messages)
+        | _, Failure errs      -> Failure(errs @ messages)
 
     /// <summary>
     /// Takes an input <c>Returns</c> (result) container, and:
@@ -422,9 +425,12 @@ module Returns =
     let inline bind (switchFunction : 'TSuccess1 -> Returns<'TSuccess2,'TMessage> ) (returns : Returns<'TSuccess1,'TMessage>) =
         // On Success, run the next step and fold this step's warnings into its result (see jointMessages
         // for the resulting message ordering); on Failure, short-circuit and propagate the errors as-is.
-        let fSuccess (s, msgs) = switchFunction  s |> jointMessages msgs
-        let fFailure (msgs) = Failure msgs
-        either fSuccess fFailure returns
+        // Matched directly rather than through `either` with local lambdas, which allocated closures on every call
+        // (bind sits on the hottest path of any pipeline); jointMessages returns the step's result as-is when there
+        // are no warnings to fold in.
+        match returns with
+        | Success (s, msgs) -> switchFunction s |> jointMessages msgs
+        | Failure msgs      -> Failure msgs
 
     // -------------------------------------------------------------------------------------- //
 
